@@ -9,10 +9,9 @@
 ## 快速用法
 
 ```python
-from vision_api import ask_vision
-result = ask_vision(image, prompt="描述图片内容", backend="claude", timeout=60, max_pixels=1_440_000)
-# image: 文件路径(str/Path) 或 PIL Image
-# backend: 'claude'(默认) | 'openai' | 'modelscope'
+from memory import vision_api
+result = vision_api.vision_call(image, prompt="描述图片内容", backend="claude", timeout=120)
+# image: 文件路径/bytes/PIL.Image | backend: 'claude'(默认) | 'gpt'
 # 返回 str：成功为模型回复，失败为 'Error: ...'
 ```
 
@@ -21,3 +20,5 @@ result = ask_vision(image, prompt="描述图片内容", backend="claude", timeou
 1. 复制 `memory/vision_api.template.py` → `memory/vision_api.py`
 2. 只改头部"用户配置区"：去 `mykey.py` 里扫描变量名（⚠️ 只看名字，禁止输出 apikey 值），尝试找能用配置名填入 `CLAUDE_CONFIG_KEY` / `OPENAI_CONFIG_KEY`，`DEFAULT_BACKEND` 选后端，并测试
 3. 保底：没有可用 config 时去 `https://modelscope.cn/my/myaccesstoken` 申请 token 填入 `MODELSCOPE_API_KEY`
+
+> ✅ 当前 `memory/vision_api.py` 已配置，使用 `native_claude_config`（minimax端点）。

@@ -67,17 +67,20 @@ def _preview_text(pairs):
     return _last_summary(pairs) or _first_user(pairs)
 
 def _parse_native_history(pairs):
+    """Parse log pairs into a (user, assistant) history list.
+    Resilient: a single corrupt pair (e.g. truncated after HTTP 429) is skipped
+    rather than aborting the whole restore. Returns None only if nothing parses."""
     history = []
     for p, r in pairs:
         try: user_msg = json.loads(p)
-        except Exception: return None
+        except Exception: continue
+        if not (isinstance(user_msg, dict) and user_msg.get('role') == 'user'): continue
         try: blocks = ast.literal_eval(r)
-        except Exception: return None
-        if not (isinstance(user_msg, dict) and user_msg.get('role') == 'user'): return None
-        if not isinstance(blocks, list): return None
+        except Exception: continue
+        if not isinstance(blocks, list): continue
         history.append(user_msg)
         history.append({'role': 'assistant', 'content': blocks})
-    return history
+    return history or None
 
 def list_sessions(exclude_pid=None):
     """Newest-first list of (path, mtime, first_user_text, n_rounds)."""

@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GenericAgent</title>
+
+  <!-- Tailwind CSS v3 via Play CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            ink: { 950: '#08080a', 900: '#0e0e12', 850: '#13131a', 800: '#191923', 700: '#22222e', 600: '#2d2d3b', 500: '#393949' },
+            frost: { 50: '#f7f8fb', 100: '#e6e8ef', 200: '#c8ccd8', 300: '#9ea4b6', 400: '#737988', 500: '#515564' },
+            brand: { 50: '#eef4ff', 100: '#dbe8ff', 400: '#5aa5ff', 500: '#4a9eff', 600: '#2a7ae0', 700: '#1e63ba' },
+            accent: { green: '#4ade80', amber: '#fbbf24', rose: '#fb7185', violet: '#a78bfa', pink: '#ec4899' },
+          },
+          fontFamily: {
+            sans: ['"Inter"', '"Segoe UI Variable"', '"Segoe UI"', '"PingFang SC"', '"Microsoft YaHei UI"', 'system-ui', 'sans-serif'],
+            mono: ['"JetBrains Mono"', '"Cascadia Code"', '"SF Mono"', 'Consolas', 'monospace'],
+          },
+          boxShadow: {
+            'inset-t': 'inset 0 1px 0 0 rgba(255,255,255,0.05)',
+            'glow': '0 0 0 4px rgba(74,158,255,0.2)',
+            'soft': '0 4px 14px rgba(0,0,0,0.35)',
+            'pop': '0 16px 50px -8px rgba(0,0,0,0.55)',
+            'brand': '0 6px 20px -4px rgba(74,158,255,0.45)',
+          },
+          animation: {
+            'fade-in': 'fadeIn 0.2s ease-out',
+            'slide-up': 'slideUp 0.25s cubic-bezier(0.4,0,0.2,1)',
+            'blink': 'blink 1s step-end infinite',
+            'float': 'float 3s ease-in-out infinite',
+            'pulse-slow': 'pulse 2.5s ease-in-out infinite',
+          },
+          keyframes: {
+            fadeIn: { '0%': { opacity: 0, transform: 'translateY(4px)' }, '100%': { opacity: 1, transform: 'none' } },
+            slideUp: { '0%': { opacity: 0, transform: 'translateY(14px)' }, '100%': { opacity: 1, transform: 'none' } },
+            blink: { '50%': { opacity: 0 } },
+            float: { '50%': { transform: 'translateY(-4px)' } },
+          },
+        },
+      },
+    };
+  </script>
+
+  <!-- Inter & JetBrains Mono -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+  <!-- Code highlighting & Markdown -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark-dimmed.min.css">
+  <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+
+  <!-- Lucide icons -->
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body class="h-screen overflow-hidden text-frost-100 font-sans text-[13px] antialiased app-bg">
+  <div id="app" class="flex h-full overflow-hidden">
+    <!-- ═══════════ SIDEBAR ═══════════ -->
+    <aside id="sidebar"
+      class="sidebar-glass shrink-0 w-[280px] flex flex-col transition-all duration-200 overflow-hidden">
+      <!-- Brand -->
+      <div class="flex items-center justify-between px-4 pt-4 pb-3 shrink-0">
+        <div class="flex items-center gap-2.5 min-w-0">
+          <div class="w-9 h-9 rounded-xl bg-gradient-to-br from-brand-400 via-accent-violet to-accent-pink flex items-center justify-center shadow-brand">
+            <i data-lucide="sparkles" class="w-4.5 h-4.5 text-white" style="width:18px;height:18px"></i>
+          </div>
+          <span class="font-semibold text-frost-50 tracking-tight text-[15.5px]">GenericAgent</span>
+        </div>
+        <button id="sidebar-collapse" class="w-8 h-8 rounded-lg text-frost-300 hover:text-frost-50 hover:bg-white/8 flex items-center justify-center transition" title="收起">
+          <i data-lucide="panel-left-close" class="w-4 h-4"></i>
+        </button>
+      </div>
+
+      <!-- Nav tabs -->
+      <nav class="flex gap-1 px-3 mb-3 shrink-0" id="nav-tabs">
+        <button data-tab="chat" class="tab-btn flex-1 px-2 py-2 rounded-lg text-[12.5px] font-medium transition flex items-center justify-center gap-1.5">
+          <i data-lucide="message-square" class="w-3.5 h-3.5"></i>对话
+        </button>
+        <button data-tab="skills" class="tab-btn flex-1 px-2 py-2 rounded-lg text-[12.5px] font-medium transition flex items-center justify-center gap-1.5">
+          <i data-lucide="layout-grid" class="w-3.5 h-3.5"></i>能力
+        </button>
+        <button data-tab="settings" class="tab-btn flex-1 px-2 py-2 rounded-lg text-[12.5px] font-medium transition flex items-center justify-center gap-1.5">
+          <i data-lucide="settings" class="w-3.5 h-3.5"></i>设置
+        </button>
+      </nav>
+
+      <!-- Chat-tab sidebar content -->
+      <div id="sidebar-chat" class="flex flex-col min-h-0 flex-1 px-3 pb-3">
+        <button id="btn-new-chat" class="group w-full mb-4 px-3.5 py-2.5 rounded-xl bg-gradient-to-br from-white/12 to-white/6 hover:from-white/18 hover:to-white/10 active:scale-[0.98] border border-white/10 hover:border-white/20 text-frost-50 flex items-center gap-2.5 text-[13.5px] font-medium transition shadow-soft">
+          <span class="w-5 h-5 rounded-md bg-gradient-to-br from-brand-400 to-accent-violet flex items-center justify-center"><i data-lucide="plus" class="w-3.5 h-3.5 text-white"></i></span>
+          新对话
+        </button>
+
+        <!-- Recent sessions -->
+        <div class="flex items-center justify-between px-2 pb-1.5">
+          <span class="text-[11px] font-semibold text-frost-300 uppercase tracking-[0.08em]">最近对话</span>
+          <button id="btn-refresh-sessions" class="p-1 rounded text-frost-300 hover:text-frost-50 hover:bg-white/8 transition" title="刷新">
+            <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
+          </button>
+        </div>
+        <div class="relative px-2 pb-2">
+          <i data-lucide="search" class="w-3.5 h-3.5 text-frost-400 absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none"></i>
+          <input id="session-search" type="text" placeholder="搜索对话..."
+            class="w-full pl-7 pr-2 py-1.5 bg-white/5 border border-white/8 rounded-md text-[12px] text-frost-100 placeholder:text-frost-400 outline-none focus:border-brand-400 focus:bg-white/8 transition" />
+        </div>
+        <div id="sessions-list" class="flex-1 min-h-0 overflow-y-auto space-y-1 pr-0.5">
+          <div class="text-frost-300 text-[12.5px] p-2 text-center">加载中...</div>
+        </div>
+
+        <!-- Actions -->
+        <div class="pt-3 mt-3 border-t border-white/8 space-y-0.5 shrink-0">
+          <div class="text-[11px] font-semibold text-frost-300 uppercase tracking-[0.08em] px-2 pb-1.5">操作</div>
+          <button data-action="next_llm" class="action-btn"><i data-lucide="arrow-right-left" class="w-4 h-4"></i>切换备用链路</button>
+          <button data-action="reinject_tools" class="action-btn"><i data-lucide="wrench" class="w-4 h-4"></i>重新注入工具</button>
+          <button data-action="desktop_pet" class="action-btn"><span class="text-[14px] w-4 flex justify-center">🐱</span><span>桌面宠物</span></button>
+        </div>
+
+        <!-- Autonomous -->
+        <div class="pt-3 mt-3 border-t border-white/8 shrink-0">
+          <div class="text-[11px] font-semibold text-frost-300 uppercase tracking-[0.08em] px-2 pb-2">自主行动</div>
+          <div class="flex items-center justify-between px-2 py-1.5 rounded-lg bg-white/3 mb-1.5">
+            <div class="flex flex-col">
+              <span class="text-[10.5px] text-frost-300 uppercase tracking-wider">空闲</span>
+              <span id="idle-value" class="text-[14px] font-mono font-semibold text-frost-50">—</span>
+            </div>
+            <label class="relative inline-flex items-center cursor-pointer">
+              <input type="checkbox" id="autonomous-toggle" class="sr-only peer">
+              <div class="w-10 h-5 bg-white/10 peer-checked:bg-gradient-to-r peer-checked:from-brand-400 peer-checked:to-accent-violet rounded-full transition"></div>
+              <div class="absolute left-0.5 top-0.5 bg-white w-4 h-4 rounded-full shadow transition peer-checked:translate-x-5"></div>
+            </label>
+          </div>
+          <button data-action="idle_trigger" class="action-btn text-[12px]">
+            <i data-lucide="timer-reset" class="w-4 h-4"></i>立即触发自主
+          </button>
+          <div class="flex items-center gap-1.5 px-2 py-1 text-[11.5px] text-frost-300">
+            <span id="autonomous-dot" class="w-1.5 h-1.5 rounded-full bg-frost-500 transition"></span>
+            <span id="autonomous-hint-text">已停止</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Settings-tab sidebar content -->
+      <div id="sidebar-settings" class="hidden flex-col min-h-0 flex-1 px-4 pb-4 overflow-y-auto">
+        <div class="text-[11px] font-semibold text-frost-300 uppercase tracking-[0.08em] px-1 pb-2">说明</div>
+        <p class="text-[12.5px] text-frost-300 leading-[1.7] px-1 mb-4">
+          在右侧管理 LLM 接入凭证和参数，修改后<span class="text-frost-100">保存</span>再<span class="text-frost-100">热重载</span>即可生效。
+        </p>
+        <div class="text-[11px] font-semibold text-frost-300 uppercase tracking-[0.08em] px-1 pb-2">会话类型</div>
+        <div class="space-y-2.5 px-1">
+          <div class="flex items-start gap-2">
+            <span class="mt-1.5 w-1.5 h-1.5 rounded-full bg-accent-violet shrink-0"></span>
+            <div class="min-w-0">
+              <div class="text-[12.5px] text-frost-100 font-medium">native_claude</div>
+              <div class="text-[11px] text-frost-400">Anthropic / CC 协议</div>
+            </div>
+          </div>
+          <div class="flex items-start gap-2">
+            <span class="mt-1.5 w-1.5 h-1.5 rounded-full bg-brand-400 shrink-0"></span>
+            <div class="min-w-0">
+              <div class="text-[12.5px] text-frost-100 font-medium">native_oai</div>
+              <div class="text-[11px] text-frost-400">OpenAI / 兼容协议</div>
+            </div>
+          </div>
+          <div class="flex items-start gap-2">
+            <span class="mt-1.5 w-1.5 h-1.5 rounded-full bg-accent-pink shrink-0"></span>
+            <div class="min-w-0">
+              <div class="text-[12.5px] text-frost-100 font-medium">mixin</div>
+              <div class="text-[11px] text-frost-400">多节点故障转移</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Skills-tab sidebar content -->
+      <div id="sidebar-skills" class="hidden flex-col min-h-0 flex-1 px-3 pb-3 overflow-y-auto">
+        <div class="text-[11px] font-semibold text-frost-300 uppercase tracking-[0.08em] px-2 pb-2">分类</div>
+        <div id="skills-categories" class="space-y-1"></div>
+        <div class="mt-5 text-[11px] font-semibold text-frost-300 uppercase tracking-[0.08em] px-2 pb-2">统计</div>
+        <div id="skills-stats" class="px-2 text-[12.5px] text-frost-200 space-y-1.5"></div>
+      </div>
+
+      <!-- Footer: theme switch -->
+      <div class="shrink-0 px-3 py-3 border-t border-white/8 bg-white/3">
+        <label class="theme-switch flex items-center justify-between gap-3 px-3 py-2 rounded-xl cursor-pointer select-none">
+          <span class="flex items-center gap-2 min-w-0">
+            <span class="theme-switch-label-text text-[12.5px] font-medium">
+              <span class="theme-icon-dark">深色模式</span>
+              <span class="theme-icon-light hidden">浅色模式</span>
+            </span>
+          </span>
+          <span class="theme-switch-track">
+            <input type="checkbox" id="theme-toggle" class="sr-only">
+            <span class="theme-switch-track-ic theme-switch-track-ic-moon">
+              <i data-lucide="moon" class="w-3 h-3"></i>
+            </span>
+            <span class="theme-switch-track-ic theme-switch-track-ic-sun">
+              <i data-lucide="sun" class="w-3 h-3"></i>
+            </span>
+            <span class="theme-switch-thumb">
+              <i data-lucide="moon" class="w-3 h-3 theme-icon-dark"></i>
+              <i data-lucide="sun" class="w-3 h-3 theme-icon-light hidden"></i>
+            </span>
+          </span>
+        </label>
+      </div>
+    </aside>
+
+    <!-- Collapsed rail -->
+    <div id="sidebar-rail" class="hidden w-11 bg-ink-900 border-r border-ink-700/60 flex-col items-center py-3 gap-1.5 shrink-0">
+      <button id="sidebar-expand" class="w-8 h-8 rounded-md text-frost-400 hover:text-frost-50 hover:bg-ink-700/60 flex items-center justify-center" title="展开">
+        <i data-lucide="panel-left-open" class="w-4 h-4"></i>
+      </button>
+      <button id="rail-new-chat" class="w-8 h-8 rounded-md text-frost-400 hover:text-frost-50 hover:bg-ink-700/60 flex items-center justify-center" title="新对话">
+        <i data-lucide="plus" class="w-4 h-4"></i>
+      </button>
+      <button id="rail-skills" class="w-8 h-8 rounded-md text-frost-400 hover:text-frost-50 hover:bg-ink-700/60 flex items-center justify-center" title="能力">
+        <i data-lucide="layout-grid" class="w-4 h-4"></i>
+      </button>
+    </div>
+
+    <!-- ═══════════ MAIN ═══════════ -->
+    <div class="flex-1 min-w-0 flex flex-col overflow-hidden">
+      <!-- Topbar -->
+      <header class="h-12 px-5 flex items-center justify-between border-b border-white/5 bg-ink-900/40 backdrop-blur-xl shrink-0">
+        <div class="flex items-center gap-3 min-w-0 flex-1">
+          <span id="conversation-title" class="text-frost-50 font-medium truncate">新对话</span>
+        </div>
+        <div class="flex items-center gap-1.5 shrink-0">
+          <div id="llm-selector" class="relative flex items-center gap-1.5 px-2.5 py-1.5 bg-ink-700 hover:bg-ink-600 border border-ink-600 hover:border-ink-500 rounded-md cursor-pointer transition text-[11.5px] font-mono select-none">
+            <span class="w-1.5 h-1.5 rounded-full bg-brand-400 shadow-[0_0_4px_rgba(74,158,255,0.6)]"></span>
+            <span id="llm-name" class="max-w-[220px] truncate text-frost-100">—</span>
+            <i data-lucide="chevron-down" class="w-3 h-3 text-frost-400"></i>
+            <div id="llm-dropdown" class="hidden absolute top-full right-0 mt-1.5 min-w-[280px] max-w-[340px] bg-ink-700 border border-ink-500 rounded-lg shadow-pop z-50 p-1"></div>
+          </div>
+        </div>
+      </header>
+
+      <!-- ─── Chat view ─── -->
+      <main id="view-chat" class="flex-1 flex flex-col min-h-0 overflow-hidden">
+        <div id="messages" class="flex-1 overflow-y-auto px-6 md:px-10 pt-12 pb-8 scroll-smooth">
+          <div class="welcome flex flex-col items-center justify-center min-h-[70%] text-center gap-3 select-none">
+            <div class="relative mb-4">
+              <div class="absolute inset-0 rounded-[28px] bg-gradient-to-br from-brand-400 via-accent-violet to-accent-pink blur-2xl opacity-40 animate-pulse-slow"></div>
+              <div class="relative w-20 h-20 rounded-[24px] bg-gradient-to-br from-brand-400 via-accent-violet to-accent-pink flex items-center justify-center text-white animate-float shadow-pop">
+                <i data-lucide="sparkles" class="w-10 h-10"></i>
+              </div>
+            </div>
+            <div class="text-[34px] font-semibold tracking-tight leading-tight bg-gradient-to-br from-white via-frost-50 to-frost-200 bg-clip-text text-transparent">Hello, GenericAgent</div>
+            <div class="text-frost-300 text-[14px] max-w-md">输入任务开始 · 支持粘贴图片、拖拽文件 · 切换到<button data-tab-link="skills" class="text-brand-400 hover:underline mx-1">能力库</button>探索可用能力</div>
+            <div class="flex items-center gap-4 mt-6 text-[11.5px] text-frost-400">
+              <span><kbd class="kbd">Enter</kbd> 发送</span>
+              <span><kbd class="kbd">Shift</kbd>+<kbd class="kbd">Enter</kbd> 换行</span>
+              <span><kbd class="kbd">Esc</kbd> 停止</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Input area -->
+        <footer id="input-area" class="relative px-6 md:px-10 pt-4 pb-6 shrink-0">
+          <div class="max-w-3xl mx-auto">
+          <div id="attachments" class="flex flex-wrap gap-2 mb-3 empty:hidden"></div>
+          <div id="input-box" class="flex items-end gap-1.5 bg-ink-800/80 backdrop-blur-2xl border border-white/10 rounded-[26px] pl-3 pr-2.5 py-3 shadow-soft focus-within:border-brand-400 focus-within:shadow-glow transition">
+            <div class="flex items-center gap-0.5 pb-0.5 shrink-0">
+              <button id="btn-attach-file" class="w-7 h-7 rounded-md text-frost-400 hover:text-frost-50 hover:bg-ink-600 flex items-center justify-center transition" title="附加文件">
+                <i data-lucide="paperclip" class="w-4 h-4"></i>
+              </button>
+              <button id="btn-attach-image" class="w-7 h-7 rounded-md text-frost-400 hover:text-frost-50 hover:bg-ink-600 flex items-center justify-center transition" title="附加图片">
+                <i data-lucide="image" class="w-4 h-4"></i>
+              </button>
+            </div>
+            <textarea id="input" rows="1" placeholder="为 GenericAgent 输入任务..."
+              class="flex-1 min-w-0 bg-transparent border-none outline-none resize-none text-frost-50 placeholder:text-frost-400 max-h-[220px] py-1.5 px-1 text-[14px] leading-[1.55]"></textarea>
+            <button id="btn-send" class="w-10 h-10 rounded-2xl bg-gradient-to-br from-brand-400 to-brand-600 hover:brightness-110 active:scale-95 text-white flex items-center justify-center transition shadow-brand disabled:bg-none disabled:bg-ink-600 disabled:text-frost-400 disabled:cursor-not-allowed disabled:shadow-none" title="发送 (Enter)">
+              <i data-lucide="arrow-up" class="w-4 h-4 send-ic-send"></i>
+              <i data-lucide="square" class="w-3.5 h-3.5 send-ic-stop hidden" fill="currentColor"></i>
+            </button>
+          </div>
+          <div class="flex items-center justify-between gap-2 pt-2.5 px-2 text-[11px] text-frost-400 select-none">
+            <div class="flex items-center gap-1.5">
+              <span id="status-dot" class="w-1.5 h-1.5 rounded-full bg-frost-500 transition"></span>
+              <span id="status-text">就绪</span>
+            </div>
+            <div class="flex items-center gap-3 text-frost-400">
+              <span><kbd class="kbd">Enter</kbd> 发送</span>
+              <span><kbd class="kbd">Shift</kbd>+<kbd class="kbd">Enter</kbd> 换行</span>
+            </div>
+          </div>
+          </div>
+
+          <div id="drag-overlay" class="hidden absolute inset-x-4 inset-y-2 bg-brand-500/10 border-2 border-dashed border-brand-400 rounded-2xl items-center justify-center backdrop-blur-sm pointer-events-none z-10">
+            <div class="text-brand-400 text-center">
+              <i data-lucide="upload-cloud" class="w-11 h-11 mx-auto mb-1.5"></i>
+              <p class="font-medium">松开以附加</p>
+            </div>
+          </div>
+        </footer>
+      </main>
+
+      <!-- ─── Settings view ─── -->
+      <main id="view-settings" class="hidden flex-1 overflow-y-auto settings-bg">
+        <div class="px-10 py-10 max-w-3xl mx-auto">
+          <!-- Hero -->
+          <div class="relative overflow-hidden rounded-3xl p-7 mb-8 border border-white/5 settings-hero">
+            <div class="absolute inset-0 bg-gradient-to-br from-brand-500/12 via-accent-violet/8 to-accent-pink/6"></div>
+            <div class="absolute -top-16 -right-16 w-64 h-64 bg-brand-400/15 rounded-full blur-3xl"></div>
+            <div class="absolute -bottom-16 -left-16 w-64 h-64 bg-accent-violet/10 rounded-full blur-3xl"></div>
+            <div class="relative">
+              <div class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/5 border border-white/10 text-[11px] text-frost-200 mb-3">
+                <i data-lucide="settings" class="w-3 h-3 text-brand-400"></i>LLM Configuration
+              </div>
+              <h2 class="text-[26px] font-semibold tracking-tight leading-tight bg-gradient-to-br from-white to-frost-200 bg-clip-text text-transparent">接入配置</h2>
+              <p class="text-frost-300 text-[13px] mt-1.5">管理 API 凭证、模型参数和故障转移策略</p>
+            </div>
+          </div>
+
+          <div class="space-y-8">
+          <!-- readonly warning -->
+          <div id="settings-readonly-warn" class="hidden rounded-xl border border-amber-400/30 bg-amber-400/8 p-4 text-[13px]">
+            <div class="flex items-start gap-3">
+              <i data-lucide="alert-triangle" class="w-4 h-4 text-amber-400 shrink-0 mt-0.5"></i>
+              <div>
+                <p class="text-amber-300 font-medium mb-1">检测到 mykey.py</p>
+                <p class="text-amber-400/80 text-[12px]">mykey.py 优先级高于 mykey.json，保存的配置不会立即生效。建议将其重命名为备份。</p>
+                <button id="btn-backup-mykey-py" class="mt-2 px-3 py-1.5 rounded-lg bg-amber-400/15 hover:bg-amber-400/25 text-amber-300 text-[12px] font-medium transition">将 mykey.py 重命名为 .bak</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- LLM sessions -->
+          <section>
+            <div class="flex items-center justify-between mb-4">
+              <h2 class="text-[16px] font-semibold text-frost-50 flex items-center gap-2">
+                <i data-lucide="cpu" class="w-4.5 h-4.5 text-brand-400" style="width:18px;height:18px"></i>LLM 配置
+              </h2>
+              <button id="btn-add-session" class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-brand-500 hover:bg-brand-400 text-white text-[12.5px] font-medium transition">
+                <i data-lucide="plus" class="w-3.5 h-3.5"></i>添加
+              </button>
+            </div>
+            <div id="settings-sessions" class="space-y-3"></div>
+          </section>
+
+          <!-- Mixin -->
+          <section>
+            <h2 class="text-[16px] font-semibold text-frost-50 flex items-center gap-2 mb-4">
+              <i data-lucide="shuffle" class="w-4.5 h-4.5 text-accent-violet" style="width:18px;height:18px"></i>Mixin 故障转移
+            </h2>
+            <div class="settings-card space-y-4">
+              <label class="flex items-center justify-between">
+                <div>
+                  <div class="text-[13px] font-medium text-frost-100">启用 Mixin</div>
+                  <div class="text-[11.5px] text-frost-400 mt-0.5">多节点按顺序尝试，自动切换到可用节点</div>
+                </div>
+                <label class="relative inline-flex items-center cursor-pointer">
+                  <input type="checkbox" id="mixin-enable" class="sr-only peer">
+                  <div class="w-10 h-5 bg-white/10 peer-checked:bg-gradient-to-r peer-checked:from-brand-400 peer-checked:to-accent-violet rounded-full transition"></div>
+                  <div class="absolute left-0.5 top-0.5 bg-white w-4 h-4 rounded-full shadow transition peer-checked:translate-x-5"></div>
+                </label>
+              </label>
+              <div id="mixin-fields" class="hidden space-y-3">
+                <div>
+                  <label class="cfg-label">节点顺序 <span class="text-frost-500 font-normal">（逗号分隔，填写 name 字段值）</span></label>
+                  <input id="mixin-llm-nos" type="text" placeholder="session-name-1, session-name-2" class="cfg-input mt-1">
+                </div>
+                <div class="grid grid-cols-2 gap-3">
+                  <div>
+                    <label class="cfg-label">最大重试次数</label>
+                    <input id="mixin-max-retries" type="number" value="10" min="1" max="100" class="cfg-input mt-1">
+                  </div>
+                  <div>
+                    <label class="cfg-label">基础延迟 (秒)</label>
+                    <input id="mixin-base-delay" type="number" value="0.5" step="0.1" min="0" class="cfg-input mt-1">
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- Footer actions -->
+          <div class="flex gap-3 pt-2">
+            <button id="btn-save-config" class="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl bg-gradient-to-br from-brand-400 to-brand-600 hover:brightness-110 active:scale-[0.98] text-white font-medium transition shadow-brand">
+              <i data-lucide="save" class="w-4 h-4"></i>保存配置
+            </button>
+            <button id="btn-reload-config" class="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-white/8 hover:bg-white/14 border border-white/10 text-frost-100 font-medium transition">
+              <i data-lucide="refresh-cw" class="w-4 h-4"></i>热重载 LLM
+            </button>
+          </div>
+          </div>
+        </div>
+      </main>
+
+      <!-- ─── Skills view ─── -->
+      <main id="view-skills" class="hidden flex-1 overflow-y-auto">
+        <div class="px-10 py-10 max-w-6xl mx-auto">
+          <div class="relative overflow-hidden rounded-3xl p-8 mb-8 border border-white/5">
+            <div class="absolute inset-0 bg-gradient-to-br from-brand-500/15 via-accent-violet/10 to-accent-pink/10"></div>
+            <div class="absolute -top-20 -right-20 w-80 h-80 bg-brand-400/20 rounded-full blur-3xl"></div>
+            <div class="absolute -bottom-20 -left-20 w-80 h-80 bg-accent-pink/10 rounded-full blur-3xl"></div>
+            <div class="relative flex items-end justify-between gap-6 flex-wrap">
+              <div>
+                <div class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/5 border border-white/10 text-[11px] text-frost-200 mb-3">
+                  <i data-lucide="zap" class="w-3 h-3 text-accent-amber"></i>Capabilities Registry
+                </div>
+                <h2 class="text-[32px] font-semibold tracking-tight leading-tight bg-gradient-to-br from-white to-frost-200 bg-clip-text text-transparent">能力库</h2>
+                <p class="text-frost-300 text-sm mt-2 max-w-xl">Agent 可调度的工具与标准作业流程（SOP）。点击卡片查看详细定义，或直接「在对话中使用」。</p>
+              </div>
+              <div class="relative">
+                <i data-lucide="search" class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-frost-400"></i>
+                <input id="skill-search" type="text" placeholder="搜索能力..." class="w-64 pl-10 pr-4 py-2.5 bg-ink-900/70 backdrop-blur border border-white/10 rounded-xl text-sm text-frost-50 placeholder:text-frost-400 outline-none focus:border-brand-400 focus:shadow-glow transition">
+              </div>
+            </div>
+          </div>
+
+          <!-- Tools section -->
+          <section>
+            <h3 class="flex items-center gap-2.5 text-frost-50 font-semibold text-[17px] tracking-tight mb-4">
+              <span class="inline-flex w-7 h-7 rounded-lg bg-accent-amber/15 items-center justify-center"><i data-lucide="wrench" class="w-4 h-4 text-accent-amber"></i></span>
+              工具
+              <span id="tools-count" class="text-xs font-medium text-frost-400 bg-white/5 px-2 py-0.5 rounded-full">0</span>
+            </h3>
+            <div id="tools-grid" class="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3"></div>
+          </section>
+
+          <!-- SOPs section -->
+          <section class="mt-12 mb-8">
+            <h3 class="flex items-center gap-2.5 text-frost-50 font-semibold text-[17px] tracking-tight mb-4">
+              <span class="inline-flex w-7 h-7 rounded-lg bg-accent-green/15 items-center justify-center"><i data-lucide="book-open" class="w-4 h-4 text-accent-green"></i></span>
+              标准作业流程 (SOP)
+              <span id="sops-count" class="text-xs font-medium text-frost-400 bg-white/5 px-2 py-0.5 rounded-full">0</span>
+            </h3>
+            <div id="sops-grid" class="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3"></div>
+          </section>
+        </div>
+      </main>
+    </div>
+
+    <input type="file" id="file-input" multiple hidden>
+    <input type="file" id="image-input" accept="image/*" multiple hidden>
+  </div>
+
+  <!-- ═══════════ Modal (for SOP detail) ═══════════ -->
+  <div id="modal-overlay" class="hidden fixed inset-0 z-[100] bg-ink-950/70 backdrop-blur-md items-center justify-center p-8 animate-fade-in">
+    <div class="bg-ink-850/95 backdrop-blur-2xl border border-white/10 rounded-2xl w-full max-w-4xl max-h-[85vh] flex flex-col overflow-hidden shadow-pop animate-slide-up">
+      <div class="flex items-center justify-between px-5 py-3.5 border-b border-ink-700">
+        <div class="flex items-center gap-2.5 min-w-0">
+          <span id="modal-icon" class="text-2xl shrink-0"></span>
+          <div class="min-w-0">
+            <h3 id="modal-title" class="font-semibold text-frost-50 truncate">—</h3>
+            <p id="modal-subtitle" class="text-xs text-frost-400 truncate"></p>
+          </div>
+        </div>
+        <div class="flex items-center gap-1.5 shrink-0">
+          <button id="modal-use" class="px-3 py-1.5 rounded-md bg-brand-500 hover:bg-brand-400 text-white text-xs font-medium flex items-center gap-1.5 transition">
+            <i data-lucide="play" class="w-3.5 h-3.5"></i>在对话中使用
+          </button>
+          <button id="modal-close" class="w-8 h-8 rounded-md text-frost-400 hover:text-frost-50 hover:bg-ink-700 flex items-center justify-center transition">
+            <i data-lucide="x" class="w-4 h-4"></i>
+          </button>
+        </div>
+      </div>
+      <div id="modal-body" class="flex-1 overflow-y-auto px-6 py-5 prose-md"></div>
+    </div>
+  </div>
+
+  <!-- ═══════════ Session Editor Modal ═══════════ -->
+  <div id="session-editor-overlay" class="hidden fixed inset-0 z-[200] bg-ink-950/80 backdrop-blur-md flex items-center justify-center p-6 animate-fade-in">
+    <div class="bg-ink-850 border border-white/10 rounded-2xl w-full max-w-lg max-h-[90vh] flex flex-col shadow-pop animate-slide-up">
+      <div class="flex items-center justify-between px-5 py-4 border-b border-ink-700 shrink-0">
+        <h3 id="session-editor-title" class="font-semibold text-frost-50 text-[15px]">编辑 LLM 配置</h3>
+        <button id="session-editor-close" class="w-8 h-8 rounded-md text-frost-400 hover:text-frost-50 hover:bg-ink-700 flex items-center justify-center transition">
+          <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
+      </div>
+      <div class="flex-1 overflow-y-auto px-5 py-5 space-y-4">
+        <!-- Type -->
+        <div>
+          <label class="cfg-label">类型</label>
+          <div class="mt-1.5 flex gap-2 flex-wrap">
+            <label class="cfg-type-radio"><input type="radio" name="cfg-type" value="native_claude" checked>
+              <span>native_claude</span></label>
+            <label class="cfg-type-radio"><input type="radio" name="cfg-type" value="native_oai">
+              <span>native_oai</span></label>
+            <label class="cfg-type-radio"><input type="radio" name="cfg-type" value="claude">
+              <span>claude (旧)</span></label>
+            <label class="cfg-type-radio"><input type="radio" name="cfg-type" value="oai">
+              <span>oai (旧)</span></label>
+          </div>
+        </div>
+        <!-- Basic fields -->
+        <div class="grid grid-cols-2 gap-3">
+          <div class="col-span-2">
+            <label class="cfg-label">API Key <span class="text-rose-400">*</span></label>
+            <input id="cfg-apikey" type="password" placeholder="sk-ant-... 或 sk-..." class="cfg-input mt-1">
+          </div>
+          <div class="col-span-2">
+            <label class="cfg-label">API Base <span class="text-rose-400">*</span></label>
+            <input id="cfg-apibase" type="text" placeholder="https://api.anthropic.com" class="cfg-input mt-1">
+          </div>
+          <div class="col-span-2">
+            <div class="flex items-center justify-between">
+              <label class="cfg-label">Model <span class="text-rose-400">*</span></label>
+              <button id="cfg-fetch-models" type="button"
+                class="inline-flex items-center gap-1 text-[11px] text-brand-400 hover:text-brand-300 transition disabled:opacity-50">
+                <i data-lucide="refresh-cw" class="w-3 h-3" id="cfg-fetch-icon"></i>
+                <span id="cfg-fetch-label">获取模型列表</span>
+              </button>
+            </div>
+            <input id="cfg-model" type="text" list="cfg-model-list" autocomplete="off"
+                   placeholder="claude-opus-4-5" class="cfg-input mt-1">
+            <datalist id="cfg-model-list"></datalist>
+            <div id="cfg-fetch-hint" class="hidden text-[11px] mt-1"></div>
+          </div>
+          <div class="col-span-2">
+            <label class="cfg-label">Name <span class="text-frost-500 font-normal">(显示名，Mixin 引用用)</span></label>
+            <input id="cfg-name" type="text" placeholder="my-claude" class="cfg-input mt-1">
+          </div>
+        </div>
+        <!-- Advanced toggle -->
+        <button id="cfg-advanced-toggle" type="button" class="flex items-center gap-1.5 text-[12px] text-frost-400 hover:text-frost-200 transition">
+          <svg id="cfg-adv-caret" class="w-3.5 h-3.5 transition-transform" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+          高级选项
+        </button>
+        <div id="cfg-advanced-fields" class="hidden space-y-3">
+          <div class="grid grid-cols-2 gap-3">
+            <div class="col-span-2">
+              <label class="cfg-label">Proxy</label>
+              <input id="cfg-proxy" type="text" placeholder="http://127.0.0.1:2082" class="cfg-input mt-1">
+            </div>
+            <div>
+              <label class="cfg-label">Context Window</label>
+              <input id="cfg-context-win" type="number" placeholder="28000" class="cfg-input mt-1">
+            </div>
+            <div>
+              <label class="cfg-label">Max Retries</label>
+              <input id="cfg-max-retries" type="number" placeholder="1" class="cfg-input mt-1">
+            </div>
+            <div>
+              <label class="cfg-label">Connect Timeout (s)</label>
+              <input id="cfg-connect-timeout" type="number" placeholder="5" class="cfg-input mt-1">
+            </div>
+            <div>
+              <label class="cfg-label">Read Timeout (s)</label>
+              <input id="cfg-read-timeout" type="number" placeholder="30" class="cfg-input mt-1">
+            </div>
+            <div>
+              <label class="cfg-label">Temperature</label>
+              <input id="cfg-temperature" type="number" step="0.1" placeholder="1.0" class="cfg-input mt-1">
+            </div>
+            <div>
+              <label class="cfg-label">Max Tokens</label>
+              <input id="cfg-max-tokens" type="number" placeholder="8192" class="cfg-input mt-1">
+            </div>
+            <div class="col-span-2">
+              <label class="cfg-label">Reasoning Effort</label>
+              <select id="cfg-reasoning-effort" class="cfg-input mt-1">
+                <option value="">(默认)</option>
+                <option>none</option><option>minimal</option><option>low</option>
+                <option>medium</option><option>high</option><option>xhigh</option>
+              </select>
+            </div>
+            <!-- Claude-only fields -->
+            <div class="col-span-2 cfg-claude-only">
+              <label class="cfg-label">Thinking Type <span class="text-frost-500 font-normal">(Claude)</span></label>
+              <select id="cfg-thinking-type" class="cfg-input mt-1">
+                <option value="">(默认 adaptive)</option>
+                <option>adaptive</option><option>enabled</option><option>disabled</option>
+              </select>
+            </div>
+            <div class="cfg-claude-only">
+              <label class="cfg-label">Thinking Budget Tokens</label>
+              <input id="cfg-thinking-budget" type="number" placeholder="32768" class="cfg-input mt-1">
+            </div>
+            <div class="cfg-claude-only">
+              <label class="cfg-label">User Agent</label>
+              <input id="cfg-user-agent" type="text" placeholder="claude-cli/2.1.113..." class="cfg-input mt-1">
+            </div>
+            <div class="col-span-2 cfg-claude-only">
+              <label class="flex items-center gap-2.5 cursor-pointer">
+                <input type="checkbox" id="cfg-fake-cc" class="w-4 h-4 rounded accent-brand-400">
+                <span class="text-[13px] text-frost-200">Fake CC System Prompt <span class="text-frost-400 font-normal text-[12px]">(反代/镜像必开)</span></span>
+              </label>
+            </div>
+            <!-- OAI-only fields -->
+            <div class="col-span-2 cfg-oai-only">
+              <label class="cfg-label">API Mode <span class="text-frost-500 font-normal">(OAI)</span></label>
+              <select id="cfg-api-mode" class="cfg-input mt-1">
+                <option value="">chat_completions (默认)</option>
+                <option value="responses">responses</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="flex gap-3 px-5 py-4 border-t border-ink-700 shrink-0">
+        <button id="session-editor-save" class="flex-1 py-2 rounded-xl bg-brand-500 hover:bg-brand-400 text-white font-medium transition">保存</button>
+        <button id="session-editor-cancel" class="px-5 py-2 rounded-xl bg-white/8 hover:bg-white/14 text-frost-100 font-medium transition">取消</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/api.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

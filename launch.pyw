@@ -1,6 +1,6 @@
 import webview, threading, subprocess, sys, time, os, ctypes, atexit, socket, random
 
-WINDOW_WIDTH, WINDOW_HEIGHT, RIGHT_PADDING, TOP_PADDING = 600, 900, 0, 100
+WINDOW_WIDTH, WINDOW_HEIGHT, RIGHT_PADDING, TOP_PADDING = 800, 1000, 0, 60
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 frontends_dir = os.path.join(script_dir, "frontends")
@@ -20,6 +20,15 @@ def start_streamlit(port):
     global proc
     cmd = [sys.executable, "-m", "streamlit", "run", os.path.join(frontends_dir, "stapp.py"), "--server.port", str(port), "--server.address", "localhost", "--server.headless", "true"]
     proc = subprocess.Popen(cmd)
+    atexit.register(proc.kill)
+
+def start_webapp(http_port, ws_port):
+    """Start the Cursor-style webapp backend (bottle + WebSocket)."""
+    global proc
+    cmd = [sys.executable, os.path.join(frontends_dir, "webapp.py"),
+           "--http-port", str(http_port), "--ws-port", str(ws_port)]
+    creationflags = 0x08000000 if os.name == 'nt' else 0  # CREATE_NO_WINDOW
+    proc = subprocess.Popen(cmd, creationflags=creationflags)
     atexit.register(proc.kill)
 
 def inject(text):
@@ -73,10 +82,16 @@ if __name__ == '__main__':
     parser.add_argument('--dingtalk', '--dt', dest='dingtalk', action='store_true', help='启动 DingTalk Bot');
     parser.add_argument('--sched', action='store_true', help='启动计划任务调度器')
     parser.add_argument('--llm_no', type=int, default=0, help='LLM编号')
+    parser.add_argument('--legacy', action='store_true', help='使用旧 Streamlit UI 代替新 Web UI')
     args = parser.parse_args()
     port = str(find_free_port()) if args.port == '0' else args.port
-    print(f'[Launch] Using port {port}')
-    threading.Thread(target=start_streamlit, args=(port,), daemon=True).start()
+    if args.legacy:
+        print(f'[Launch] Using legacy Streamlit UI on port {port}')
+        threading.Thread(target=start_streamlit, args=(port,), daemon=True).start()
+    else:
+        ws_port = str(find_free_port())
+        print(f'[Launch] Using Cursor-style Web UI on http:{port}, ws:{ws_port}')
+        threading.Thread(target=start_webapp, args=(port, ws_port), daemon=True).start()
 
     if args.tg:
         tgproc = subprocess.Popen([sys.executable, os.path.join(frontends_dir, "tgapp.py")], creationflags=subprocess.CREATE_NO_WINDOW if os.name=='nt' else 0)
@@ -114,8 +129,10 @@ if __name__ == '__main__':
         print('[Launch] Task Scheduler started (duplicate prevented by scheduler port lock)')
     else: print('[Launch] Task Scheduler not enabled (--sched)')
 
-    monitor_thread = threading.Thread(target=idle_monitor, daemon=True)
-    monitor_thread.start()
+    if args.legacy:
+        # idle_monitor injects via Streamlit's DOM selectors, only relevant in legacy mode
+        monitor_thread = threading.Thread(target=idle_monitor, daemon=True)
+        monitor_thread.start()
     if os.name == 'nt':
         screen_width = get_screen_width()
         x_pos = screen_width - WINDOW_WIDTH - RIGHT_PADDING

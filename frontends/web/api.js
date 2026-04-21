@@ -1,0 +1,120 @@
+/* ═══════════════════════════════════════════════════
+   API Layer · Decouples UI from backend implementation
+   ═══════════════════════════════════════════════════
+   Exposes `window.GA_API`:
+     REST:
+       - getConfig()               → { ws_port }
+       - getStatus()               → { llm, llms, running, last_reply_time, autonomous_enabled }
+       - listSessions()            → [{id,path,mtime,preview,rounds}]
+       - getSessionHistory(path)   → [{role,content}]
+       - restoreSession(path)      → { message, ok, history: [...] }
+       - listSkills()              → { tools: [...], sops: [...] }
+       - getSop(name)              → { name, content }
+       - uploadFile(file)          → { path, name }
+     WS (realtime):
+       - connect(handlers)         → opens WS, dispatches messages via handlers
+       - send(type, payload)       → sends a typed message
+   All requests are self-describing; changing backend internals should only
+   require updating this file. UI code should never reach into backend state.
+   ═══════════════════════════════════════════════════ */
+(() => {
+  const BASE = '';  // same origin
+  let ws = null;
+  let wsHandlers = {};
+  let wsReconnectTimer = null;
+
+  async function _getJSON(path) {
+    const r = await fetch(BASE + path);
+    if (!r.ok) throw new Error(`GET ${path}: ${r.status}`);
+    return r.json();
+  }
+  async function _postJSON(path, body) {
+    const r = await fetch(BASE + path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body || {}),
+    });
+    if (!r.ok) {
+      const text = await r.text().catch(() => '');
+      throw new Error(`POST ${path}: ${r.status} ${text}`);
+    }
+    return r.json();
+  }
+
+  async function getConfig() { return _getJSON('/api/config'); }
+  async function getStatus() { return _getJSON('/api/status'); }
+  async function listSessions(q) {
+    const qs = q ? ('?q=' + encodeURIComponent(q)) : '';
+    return _getJSON('/api/sessions' + qs);
+  }
+  async function getSessionHistory(path) {
+    const r = await _getJSON('/api/session/history?path=' + encodeURIComponent(path));
+    return r.messages || [];
+  }
+  async function restoreSession(path) { return _postJSON('/api/session/restore', { path }); }
+  async function renameSession(path, title) { return _postJSON('/api/session/rename', { path, title }); }
+  async function deleteSession(path) { return _postJSON('/api/session/delete', { path }); }
+  async function listSkills() { return _getJSON('/api/skills'); }
+  async function getSop(name) {
+    const r = await _getJSON('/api/skills/sop?name=' + encodeURIComponent(name));
+    return r;
+  }
+  async function uploadFile(file) {
+    const fd = new FormData();
+    fd.append('file', file, file.name);
+    const r = await fetch(BASE + '/api/upload', { method: 'POST', body: fd });
+    if (!r.ok) throw new Error('upload failed: ' + r.status);
+    return r.json();
+  }
+
+  /* ── WebSocket layer ── */
+  async function connect(handlers) {
+    wsHandlers = handlers || {};
+    try {
+      const cfg = await getConfig();
+      const wsUrl = `ws://${location.hostname}:${cfg.ws_port}`;
+      ws = new WebSocket(wsUrl);
+      ws.onopen = () => { wsHandlers.onopen && wsHandlers.onopen(); };
+      ws.onclose = () => {
+        wsHandlers.onclose && wsHandlers.onclose();
+        clearTimeout(wsReconnectTimer);
+        wsReconnectTimer = setTimeout(() => connect(wsHandlers), 3000);
+      };
+      ws.onerror = (e) => { wsHandlers.onerror && wsHandlers.onerror(e); };
+      ws.onmessage = (evt) => {
+        let msg;
+        try { msg = JSON.parse(evt.data); } catch { return; }
+        const t = msg.type;
+        const fn = wsHandlers['on_' + t] || wsHandlers.onmessage;
+        if (fn) fn(msg);
+      };
+    } catch (e) {
+      wsHandlers.onerror && wsHandlers.onerror(e);
+      clearTimeout(wsReconnectTimer);
+      wsReconnectTimer = setTimeout(() => connect(wsHandlers), 3000);
+    }
+  }
+  async function getLLMConfig() { return _getJSON('/api/llm-config'); }
+  async function saveLLMConfig(data) { return _postJSON('/api/llm-config', data); }
+  async function reloadLLMConfig() { return _postJSON('/api/llm-config/reload', {}); }
+  async function backupMykeyPy() { return _postJSON('/api/llm-config/backup-py', {}); }
+  async function listModels(apikey, apibase, proxy) {
+    return _postJSON('/api/llm-config/list-models', { apikey, apibase, proxy });
+  }
+
+  function send(type, payload) {
+    if (!ws || ws.readyState !== 1) return false;
+    ws.send(JSON.stringify({ type, payload }));
+    return true;
+  }
+  function ready() { return ws && ws.readyState === 1; }
+
+  window.GA_API = {
+    getConfig, getStatus,
+    listSessions, getSessionHistory, restoreSession, renameSession, deleteSession,
+    listSkills, getSop,
+    uploadFile,
+    getLLMConfig, saveLLMConfig, reloadLLMConfig, backupMykeyPy, listModels,
+    connect, send, ready,
+  };
+})();

@@ -28,6 +28,12 @@ model_responses.txt
 
 # Sensitive files (API keys, credentials)
 mykey.py
+mykey.json
+mykey.py.bak
+
+# Debug / test images
+test_*.jpg
+test_*.png
 
 tasks/
 

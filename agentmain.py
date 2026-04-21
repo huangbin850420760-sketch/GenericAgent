@@ -90,8 +90,35 @@ class GeneraticAgent:
     def abort(self):
         if not self.is_running: return
         print('Abort current task...')
+        self.is_running = False   # Immediately visible to status broadcast; finally-block sets it again (idempotent)
         self.stop_sig = True
         if self.handler is not None: self.handler.code_stop_signal.append(1)
+
+    def _interruptible(self, gen):
+        """Run *gen* in a daemon thread; yield its items while polling stop_sig every 250 ms.
+        This lets abort() interrupt an LLM that hasn't emitted its first token yet."""
+        import queue as _Q
+        q = _Q.Queue()
+        def _produce():
+            try:
+                for item in gen:
+                    q.put(('chunk', item))
+                    if self.stop_sig: break
+            except Exception as e:
+                q.put(('err', e))
+            finally:
+                q.put(('done', None))
+        threading.Thread(target=_produce, daemon=True).start()
+        while True:
+            try:
+                tag, val = q.get(timeout=0.25)
+            except _Q.Empty:
+                if self.stop_sig: return
+                continue
+            if tag == 'done': return
+            if tag == 'err': raise val
+            yield val
+            if self.stop_sig: return
             
     def put_task(self, query, source="user", images=None):
         display_queue = queue.Queue()
@@ -138,9 +165,19 @@ class GeneraticAgent:
             if source == 'feishu' and len(self.history) > 1:   # 如果有历史记录且来自飞书，注入到首轮 user_input 中（支持/restore恢复上下文）
                 user_input = handler._get_anchor_prompt() + f"\n\n### 用户当前消息\n{raw_query}"
             if 'gpt' in self.get_llm_name(model=True): handler._done_hooks.append('请确定用户任务是否完成，如未完成需要继续工具调用直到完成任务，确实需要问用户应使用ask_user工具')
+            # build multimodal initial content when images are attached
+            initial_content = None
+            if images:
+                initial_content = [{"type": "text", "text": user_input}]
+                for img in images:
+                    if not isinstance(img, dict): continue
+                    url = img.get('data_url') or img.get('url')
+                    if url: initial_content.append({"type": "image_url", "image_url": {"url": url}})
             # although new handler, the **full** history is in llmclient, so it is full history!
-            gen = agent_runner_loop(self.llmclient, sys_prompt, user_input, 
-                                handler, TOOLS_SCHEMA, max_turns=40, verbose=self.verbose)
+            gen = self._interruptible(agent_runner_loop(
+                                self.llmclient, sys_prompt, user_input,
+                                handler, TOOLS_SCHEMA, max_turns=40, verbose=self.verbose,
+                                initial_user_content=initial_content))
             try:
                 full_resp = ""; last_pos = 0
                 for chunk in gen:
