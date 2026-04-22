@@ -438,6 +438,37 @@ def _msgs_claude2oai(messages):
     return result
 
 
+_DATA_URL_RE = re.compile(r'^data:(image/[a-zA-Z0-9.+-]+);base64,(.+)$', re.DOTALL)
+
+def _oai_imgs_to_claude(messages):
+    """Convert OAI-style `image_url` blocks in user messages into Claude-native
+    `image` blocks (`source.type = base64|url`). Claude's /messages endpoint does
+    not understand `image_url`, so without this the image is silently dropped.
+
+    Non-image blocks and assistant messages pass through unchanged.
+    """
+    out = []
+    for msg in messages:
+        if msg.get('role') != 'user' or not isinstance(msg.get('content'), list):
+            out.append(msg); continue
+        new_blocks = []
+        for b in msg['content']:
+            if not isinstance(b, dict) or b.get('type') != 'image_url':
+                new_blocks.append(b); continue
+            url = ((b.get('image_url') or {}).get('url') or '').strip()
+            if not url:
+                continue
+            m = _DATA_URL_RE.match(url)
+            if m:
+                new_blocks.append({'type': 'image',
+                    'source': {'type': 'base64', 'media_type': m.group(1), 'data': m.group(2)}})
+            elif url.startswith(('http://', 'https://')):
+                new_blocks.append({'type': 'image', 'source': {'type': 'url', 'url': url}})
+            # else: unknown url scheme — silently drop
+        out.append({**msg, 'content': new_blocks})
+    return out
+
+
 class BaseSession:
     def __init__(self, cfg):
         self.api_key = cfg['apikey']
@@ -465,6 +496,9 @@ class BaseSession:
         self.api_mode = 'responses' if mode in ('responses', 'response') else 'chat_completions'
         self.temperature = cfg.get('temperature', 1)
         self.max_tokens = cfg.get('max_tokens', 8192)
+        # Optional vision capability flag. None = autodetect by model name (see _model_supports_vision).
+        v = cfg.get('vision', None)
+        self.vision = None if v is None else bool(v)
     def _apply_claude_thinking(self, payload):
         if self.thinking_type:
             thinking = {"type": self.thinking_type}
@@ -498,6 +532,7 @@ class BaseSession:
 
 class ClaudeSession(BaseSession):
     def raw_ask(self, messages):
+        messages = _oai_imgs_to_claude(messages)
         headers = {"x-api-key": self.api_key, "Content-Type": "application/json", "anthropic-version": "2023-06-01", "anthropic-beta": "prompt-caching-2024-07-31"}
         payload = {"model": self.model, "messages": messages, "max_tokens": self.max_tokens, "stream": True}
         if self.temperature != 1: payload["temperature"] = self.temperature
@@ -553,7 +588,7 @@ class NativeClaudeSession(BaseSession):
         self._device_id = uuid.uuid4().hex + uuid.uuid4().hex[:32]
         self.tools = None
     def raw_ask(self, messages):
-        messages = _fix_messages(messages)
+        messages = _oai_imgs_to_claude(_fix_messages(messages))
         model = self.model
         beta_parts = ["claude-code-20250219", "interleaved-thinking-2025-05-14", "redact-thinking-2026-02-12", "prompt-caching-scope-2026-01-05"]
         if "[1m]" in model.lower():

@@ -33,6 +33,60 @@ if not os.path.exists(cdp_cfg):
         open(cdp_cfg, 'w', encoding='utf-8').write(f"const TID = '__ljq_{hex(random.randint(0, 99999999))[2:8]}';")
     except Exception as e: print(f'[WARN] CDP config init failed: {e} — advanced web features (tmwebdriver) will be unavailable.')
 
+_VISION_MODEL_PATTERNS = (
+    'gpt-4o', 'gpt-4.1', 'gpt-4-vision', 'gpt-5',
+    'claude-3', 'claude-opus', 'claude-sonnet', 'claude-haiku',
+    'gemini', 'qwen-vl', 'qwen2-vl', 'qwen2.5-vl', 'internvl', 'llava',
+    'glm-4v', 'glm-4.1v', 'minicpm-v', 'yi-vl', 'cogvlm',
+    'pixtral', 'molmo', 'step-1v', 'step-1o',
+    'abab6.5-vision', 'abab7-vision', 'minimax-m2-vision',
+    'vision', 'vl-',
+)
+
+def _save_images_to_disk(images):
+    """Persist inline `data:image/*;base64,...` uploads into temp/uploads/ and
+    return a list of absolute paths in the same order as *images*.
+    Entries that provide an already-saved `path` / `url` file path pass through
+    unchanged.  Malformed entries are skipped silently.
+    """
+    import base64
+    up_dir = os.path.join(script_dir, 'temp', 'uploads')
+    os.makedirs(up_dir, exist_ok=True)
+    out = []
+    for i, img in enumerate(images or []):
+        if not isinstance(img, dict): continue
+        # already-saved file path takes priority (sent via /api/upload earlier)
+        p = img.get('path')
+        if p and os.path.isabs(p) and os.path.isfile(p):
+            out.append(os.path.abspath(p)); continue
+        url = img.get('data_url') or img.get('url') or ''
+        m = re.match(r'^data:(image/[a-zA-Z0-9.+-]+);base64,(.+)$', url, re.DOTALL)
+        if not m: continue
+        mime, b64 = m.group(1), m.group(2)
+        ext = {'image/jpeg': '.jpg', 'image/png': '.png', 'image/gif': '.gif',
+               'image/webp': '.webp', 'image/bmp': '.bmp'}.get(mime, '.png')
+        safe_name = re.sub(r'[^\w.\-]', '_', img.get('name') or f'paste_{i}')
+        if not safe_name.lower().endswith(ext): safe_name += ext
+        dest = os.path.join(up_dir, f'{int(time.time()*1000)}_{i}_{safe_name}')
+        try:
+            with open(dest, 'wb') as f: f.write(base64.b64decode(b64))
+            out.append(os.path.abspath(dest))
+        except Exception as e:
+            print(f'[webapp] save image #{i} failed: {e}')
+    return out
+
+
+def _model_supports_vision(client):
+    """True iff the backend model is known to accept image inputs.
+    Priority: explicit `vision` cfg flag → keyword match on model name."""
+    if client is None: return False
+    backend = getattr(client, 'backend', client)
+    flag = getattr(backend, 'vision', None)
+    if flag is not None: return bool(flag)
+    mn = str(getattr(backend, 'model', '') or getattr(backend, 'name', '')).lower()
+    return any(p in mn for p in _VISION_MODEL_PATTERNS)
+
+
 def get_system_prompt():
     with open(os.path.join(script_dir, f'assets/sys_prompt{lang_suffix}.txt'), 'r', encoding='utf-8') as f: prompt = f.read()
     prompt += f"\nToday: {time.strftime('%Y-%m-%d %a')}\n"
@@ -168,11 +222,30 @@ class GeneraticAgent:
             # build multimodal initial content when images are attached
             initial_content = None
             if images:
-                initial_content = [{"type": "text", "text": user_input}]
-                for img in images:
-                    if not isinstance(img, dict): continue
-                    url = img.get('data_url') or img.get('url')
-                    if url: initial_content.append({"type": "image_url", "image_url": {"url": url}})
+                if _model_supports_vision(self.llmclient):
+                    initial_content = [{"type": "text", "text": user_input}]
+                    for img in images:
+                        if not isinstance(img, dict): continue
+                        url = img.get('data_url') or img.get('url')
+                        if url: initial_content.append({"type": "image_url", "image_url": {"url": url}})
+                else:
+                    # Current model can't see images — save them to disk and
+                    # hand the agent the exact paths so it doesn't scan the
+                    # workspace looking for random files.
+                    saved_paths = _save_images_to_disk(images)
+                    mname = self.get_llm_name(model=True)
+                    if saved_paths:
+                        paths_md = '\n'.join(f'  {i+1}. `{p}`' for i, p in enumerate(saved_paths))
+                        note = (f'\n\n[SYSTEM] 当前模型 `{mname}` 不支持原生图像识别，'
+                                f'用户本轮附带的 {len(saved_paths)} 张图片已保存到以下路径：\n'
+                                f'{paths_md}\n'
+                                '如需识别图片内容，**只能**使用 OCR 工具（如 rapidocr）读取**上述确切路径**，'
+                                '禁止扫描其他目录或读取任何未在上述列表中的文件。'
+                                '如果 OCR 无法满足需求，请提示用户切换到支持视觉的模型（如 gpt-4o/claude-3.5/qwen-vl）。')
+                    else:
+                        note = (f'\n\n[SYSTEM] 当前模型 `{mname}` 不支持图像识别，'
+                                f'且 {len(images)} 张附图保存失败，已丢弃。请提示用户切换视觉模型或改用 OCR。')
+                    user_input = user_input + note
             # although new handler, the **full** history is in llmclient, so it is full history!
             gen = self._interruptible(agent_runner_loop(
                                 self.llmclient, sys_prompt, user_input,
