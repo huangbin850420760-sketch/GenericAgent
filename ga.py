@@ -383,6 +383,33 @@ class GenericAgentHandler(BaseHandler):
             return StepOutcome({"status": "error", "msg": "No content found. Put content inside <file_content>...</file_content> tags in your reply body before call file_write."}, next_prompt="\n")
         try:
             new_content = expand_file_refs(blocks, base_dir=self.cwd)
+
+            # IDE mode: delegate to the connected editor so the user sees an
+            # inline diff and can accept/reject before anything lands on disk.
+            # Falls back to direct write if no IDE is connected (resp is None).
+            try:
+                import ide_bridge
+                if ide_bridge.is_ide_mode() and ide_bridge.is_connected():
+                    yield f"[Action] 请在编辑器中查看并接受/拒绝这次修改...\n"
+                    resp = ide_bridge.request({'type': 'edit_file', 'payload': {
+                        'path': path,
+                        'mode': mode,
+                        'new_content': new_content,
+                        'reason': args.get('reason') or f'{action_str} {os.path.basename(path)}',
+                    }}, timeout=300)
+                    if resp is not None:
+                        if resp.get('accepted'):
+                            yield f"[Status] ✅ IDE applied ({len(new_content)} bytes)\n"
+                            next_prompt = self._get_anchor_prompt(skip=args.get('_index', 0) > 0)
+                            return StepOutcome({"status": "success", 'writed_bytes': len(new_content), 'via': 'ide'}, next_prompt=next_prompt)
+                        else:
+                            reason = resp.get('reason') or '用户拒绝了修改'
+                            yield f"[Status] ❌ {reason}\n"
+                            return StepOutcome({"status": "rejected", "msg": reason}, next_prompt="\n")
+                    # resp is None → no IDE receiver or timeout, fall through to direct write
+            except Exception as _ide_err:
+                print(f'[do_file_write] IDE bridge failed, falling back to direct write: {_ide_err}')
+
             if mode == "prepend":
                 old = open(path, 'r', encoding="utf-8").read() if os.path.exists(path) else ""
                 open(path, 'w', encoding="utf-8").write(new_content + old)

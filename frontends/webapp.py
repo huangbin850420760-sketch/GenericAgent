@@ -121,6 +121,23 @@ def _git_sha():
         return 'unknown'
 
 
+# ───────── IDE bridge wiring ─────────
+# Route messages from ide_bridge.request()/notify() to WS connections tagged
+# as 'genericcode-ext' during the hello handshake. Returns the number of
+# IDE receivers the message was forwarded to.
+import ide_bridge  # noqa: E402  — local module, circular-safe
+
+def _send_to_ide(msg):
+    sent = 0
+    for ws in list(WS_CONNS):
+        if getattr(ws, '_client_tag', '') == 'genericcode-ext':
+            _send(ws, msg)
+            sent += 1
+    return sent
+
+ide_bridge.register(_send_to_ide)
+
+
 class ChatWS(WebSocket):
     # Per-connection metadata set on handshake. IDE-only messages (edit_file,
     # run_terminal, ...) will only be routed to connections whose client tag
@@ -187,6 +204,12 @@ class ChatWS(WebSocket):
                     threading.Thread(target=_pump_queue, args=(self, dq), daemon=True).start()
             elif t == 'action':
                 _do_action(self, msg.get('payload') or {})
+            elif t == 'apply_edit_result':
+                # Response to a previous edit_file request — deliver to waiter.
+                ide_bridge.deliver_response(msg.get('id', ''), msg.get('payload') or {})
+            elif t == 'context':
+                # IDE pushed editor state (active file, selection, open files, root).
+                ide_bridge.set_context(msg.get('payload') or {})
         except Exception as e:
             traceback.print_exc()
             _send(self, {'type': 'error', 'payload': f'{type(e).__name__}: {e}'})
@@ -684,6 +707,37 @@ def _api_sop():
     if content is None:
         return _json({'error': 'sop not found'}, 404)
     return _json({'name': name, 'content': content})
+
+
+@app.route('/api/ide-selftest', method='POST')
+def _api_ide_selftest():
+    """Dev-only endpoint used by test/m2-smoke.js to drive ide_bridge from
+    the server side without going through the LLM. Gated by GA_IDE_MODE=1.
+
+    Body: {"type": <proto-type>, "payload": {...}}
+
+    Behaviour:
+      - Request-style types (edit_file/show_diff) → ide_bridge.request(),
+        returns {"response": <payload>} or {"response": null} on timeout.
+      - Notify-style types (run_terminal/open_file) → ide_bridge.notify(),
+        returns {"receivers": <n>}.
+    """
+    if os.environ.get('GA_IDE_MODE') != '1':
+        return _json({'error': 'ide-selftest only available when GA_IDE_MODE=1'}, 403)
+    try:
+        body = json.loads(request.body.read() or b'{}')
+    except Exception as e:
+        return _json({'error': f'bad json: {e}'}, 400)
+    t = body.get('type')
+    if not t:
+        return _json({'error': 'missing type'}, 400)
+    REQUEST_TYPES = {'edit_file', 'show_diff'}
+    if t in REQUEST_TYPES:
+        resp = ide_bridge.request(body, timeout=10)
+        return _json({'response': resp})
+    else:
+        n = ide_bridge.notify(body)
+        return _json({'receivers': n})
 
 
 @app.route('/api/status')
