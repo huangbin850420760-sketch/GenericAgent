@@ -106,8 +106,29 @@ def _broadcast_status():
 
 WS_CONNS = set()
 
+# Protocol version this backend speaks (see GenericCode docs/protocol.md).
+_PROTO_VERSION = 1
+_SERVER_FEATURES = [
+    'edit_file', 'open_file', 'run_terminal', 'show_diff', 'context_push', 'diff_preview',
+]
+
+def _git_sha():
+    try:
+        out = subprocess.check_output(['git', 'rev-parse', '--short=7', 'HEAD'],
+                                      cwd=ROOT, stderr=subprocess.DEVNULL, timeout=2)
+        return out.decode().strip() or 'unknown'
+    except Exception:
+        return 'unknown'
+
 
 class ChatWS(WebSocket):
+    # Per-connection metadata set on handshake. IDE-only messages (edit_file,
+    # run_terminal, ...) will only be routed to connections whose client tag
+    # was registered as 'genericcode-ext' in M2.
+    _client_tag = ''
+    _client_proto = 0
+    _client_features = ()
+
     def handle(self):
         try:
             msg = json.loads(self.data)
@@ -115,7 +136,22 @@ class ChatWS(WebSocket):
             return
         t = msg.get('type')
         try:
-            if t == 'task':
+            if t == 'hello':
+                p = msg.get('payload') or {}
+                self._client_tag = str(p.get('client', ''))
+                self._client_proto = int(p.get('proto', 0) or 0)
+                self._client_features = tuple(p.get('features') or [])
+                negotiated = [f for f in _SERVER_FEATURES if f in self._client_features]
+                _send(self, {'type': 'hello_ack', 'payload': {
+                    'server':   'genericagent',
+                    'version':  _git_sha(),
+                    'proto':    min(_PROTO_VERSION, self._client_proto or _PROTO_VERSION),
+                    'features': negotiated,
+                    'llm':      agent.get_llm_name(),
+                }})
+                print(f'[webapp] handshake: client={self._client_tag!r} '
+                      f'proto={self._client_proto} features={negotiated}')
+            elif t == 'task':
                 payload = msg.get('payload') or {}
                 text = (payload.get('text') or '').strip()
                 images = payload.get('images') or []  # [{name, data_url}]
