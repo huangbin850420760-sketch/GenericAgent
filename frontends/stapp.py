@@ -15,7 +15,7 @@ import streamlit as st
 import time, json, re, threading, queue
 from agentmain import GeneraticAgent
 import chatapp_common  # activate /continue command (monkey patches GeneraticAgent)
-from continue_cmd import handle_frontend_command, reset_conversation
+from continue_cmd import handle_frontend_command, reset_conversation, list_sessions, extract_ui_messages
 
 st.set_page_config(page_title="Cowork", layout="wide")
 
@@ -32,17 +32,21 @@ agent = init()
 
 st.title("🖥️ Cowork")
 
-if 'autonomous_enabled' not in st.session_state: st.session_state.autonomous_enabled = False
+st.session_state.setdefault('autonomous_enabled', False)
 
 @st.fragment
 def render_sidebar():
+    st.session_state.setdefault('autonomous_enabled', False)
+    llm_options = agent.list_llms()
     current_idx = agent.llm_no
-    st.caption(f"LLM Core: {current_idx}: {agent.get_llm_name()}", help="点击切换备用链路")
+    llm_labels = {idx: f"{idx}: {(name or '').strip()}" for idx, name, _ in llm_options}
+    st.caption(f"LLM Core: {llm_labels.get(current_idx, str(current_idx))}", help="下拉切换备用链路")
+    selected_idx = st.selectbox("备用链路", [idx for idx, _, _ in llm_options], index=next((i for i, (idx, _, _) in enumerate(llm_options) if idx == current_idx), 0), format_func=llm_labels.get, label_visibility="collapsed", key="sidebar_llm_select")
+    if selected_idx != current_idx:
+        agent.next_llm(selected_idx); st.rerun(scope="fragment")
     last_reply_time = st.session_state.get('last_reply_time', 0)
     if last_reply_time > 0:
         st.caption(f"空闲时间：{int(time.time()) - last_reply_time}秒", help="当超过30分钟未收到回复时，系统会自动任务")
-    if st.button("切换备用链路"):
-        agent.next_llm(); st.rerun(scope="fragment")
     if st.button("强行停止任务"):
         agent.abort(); st.toast("已发送停止信号"); st.rerun()
     if st.button("重新注入工具"):
@@ -92,7 +96,11 @@ with st.sidebar: render_sidebar()
 
 def fold_turns(text):
     """Return list of segments: [{'type':'text','content':...}, {'type':'fold','title':...,'content':...}]"""
-    parts = re.split(r'(\**LLM Running \(Turn \d+\) \.\.\.\*\**)', text)
+    # 先把4+反引号块替换为占位符，避免误切子agent嵌套的 LLM Running
+    _ph = []
+    safe = re.sub(r'`{4,}.*?`{4,}', lambda m: (_ph.append(m.group(0)), f'\x00PH{len(_ph)-1}\x00')[1], text, flags=re.DOTALL)
+    parts = re.split(r'(\**LLM Running \(Turn \d+\) \.\.\.\*\**)', safe)
+    parts = [re.sub(r'\x00PH(\d+)\x00', lambda m: _ph[int(m.group(1))], p) for p in parts]
     if len(parts) < 4: return [{'type': 'text', 'content': text}]
     segments = []
     if parts[0].strip(): segments.append({'type': 'text', 'content': parts[0]})
@@ -103,7 +111,7 @@ def fold_turns(text):
         turns.append((marker, content))
     for idx, (marker, content) in enumerate(turns):
         if idx < len(turns) - 1:
-            _c = re.sub(r'```.*?```|<thinking>.*?</thinking>', '', content, flags=re.DOTALL)
+            _c = re.sub(r'`{3,}.*?`{3,}|<thinking>.*?</thinking>', '', content, flags=re.DOTALL)
             matches = re.findall(r'<summary>\s*((?:(?!<summary>).)*?)\s*</summary>', _c, re.DOTALL)
             if matches:
                 title = matches[0].strip()
@@ -190,10 +198,19 @@ if prompt := st.chat_input("any task?"):
         st.session_state.messages = [{"role": "assistant", "content": reset_conversation(agent), "time": ts}]
         _reset_and_rerun()
     if cmd.startswith("/continue"):
-        st.session_state.messages = list(st.session_state.messages) + [
-            {"role": "user", "content": cmd, "time": ts},
-            {"role": "assistant", "content": handle_frontend_command(agent, cmd), "time": ts},
-        ]
+        m = re.match(r'/continue\s+(\d+)\s*$', cmd.strip())
+        sessions = list_sessions(exclude_pid=os.getpid()) if m else []
+        idx = int(m.group(1)) - 1 if m else -1
+        # Resolve target path BEFORE handle (which snapshots current log, shifting indices).
+        target = sessions[idx][0] if 0 <= idx < len(sessions) else None
+        result = handle_frontend_command(agent, cmd)
+        history = extract_ui_messages(target) if target and result.startswith('✅') else None
+        tail = [{"role": "assistant", "content": result, "time": ts}]
+        if history:
+            st.session_state.messages = history + tail
+        else:
+            st.session_state.messages = list(st.session_state.messages) + \
+                [{"role": "user", "content": cmd, "time": ts}] + tail
         _reset_and_rerun()
     st.session_state.messages.append({"role": "user", "content": prompt})
     if hasattr(agent, '_pet_req') and not prompt.startswith('/'): agent._pet_req('state=walk')

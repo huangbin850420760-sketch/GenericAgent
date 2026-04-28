@@ -6,7 +6,7 @@ if sys.stderr is None: sys.stderr = open(os.devnull, "w")
 elif hasattr(sys.stderr, 'reconfigure'): sys.stderr.reconfigure(errors='replace')
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from llmcore import LLMSession, ToolClient, ClaudeSession, MixinSession, NativeToolClient, NativeClaudeSession, NativeOAISession
+from llmcore import reload_mykeys, LLMSession, ToolClient, ClaudeSession, MixinSession, NativeToolClient, NativeClaudeSession, NativeOAISession
 from agent_loop import agent_runner_loop
 from ga import GenericAgentHandler, smart_format, get_global_memory, format_error, consume_file
 
@@ -95,9 +95,21 @@ def get_system_prompt():
 
 class GeneraticAgent:
     def __init__(self):
-        script_dir = os.path.dirname(os.path.abspath(__file__))
         os.makedirs(os.path.join(script_dir, 'temp'), exist_ok=True)
-        from llmcore import mykeys
+        self.lock = threading.Lock()
+        self.task_dir = None
+        self.history = []
+        self.task_queue = queue.Queue() 
+        self.is_running = False; self.stop_sig = False
+        self.llm_no = 0;  self.inc_out = False
+        self.handler = None; self.verbose = True
+        self.load_llm_sessions()
+
+    def load_llm_sessions(self):
+        mykeys, changed = reload_mykeys()
+        if not changed and hasattr(self, 'llmclients'): return
+        try: oldhistory = self.llmclient.backend.history
+        except: oldhistory = None
         llm_sessions = []
         for k, cfg in mykeys.items():
             if not any(x in k for x in ['api', 'config', 'cookie']): continue
@@ -116,16 +128,11 @@ class GeneraticAgent:
                     else: llm_sessions[i] = ToolClient(mixin)
                 except Exception as e: print(f'[WARN] Failed to init MixinSession with cfg {s["mixin_cfg"]}: {e}')
         self.llmclients = llm_sessions
-        self.lock = threading.Lock()
-        self.task_dir = None
-        self.history = []
-        self.task_queue = queue.Queue() 
-        self.is_running = False; self.stop_sig = False
-        self.llm_no = 0;  self.inc_out = False
-        self.handler = None; self.verbose = True
-        self.llmclient = self.llmclients[self.llm_no]
-
+        self.llmclient = self.llmclients[self.llm_no%len(self.llmclients)]
+        if oldhistory: self.llmclient.backend.history = oldhistory
+    
     def next_llm(self, n=-1):
+        self.load_llm_sessions()
         self.llm_no = ((self.llm_no + 1) if n < 0 else n) % len(self.llmclients)
         lastc = self.llmclient
         self.llmclient = self.llmclients[self.llm_no]
@@ -135,7 +142,9 @@ class GeneraticAgent:
         name = self.get_llm_name(model=True)
         if 'glm' in name or 'minimax' in name or 'kimi' in name: load_tool_schema('_cn')
         else: load_tool_schema()
-    def list_llms(self): return [(i, self.get_llm_name(b), i == self.llm_no) for i, b in enumerate(self.llmclients)]
+    def list_llms(self): 
+        self.load_llm_sessions()
+        return [(i, self.get_llm_name(b), i == self.llm_no) for i, b in enumerate(self.llmclients)]
     def get_llm_name(self, b=None, model=False):
         b = self.llmclient if b is None else b
         if isinstance(b, dict): return 'BADCONFIG_MIXIN'
@@ -193,7 +202,7 @@ class GeneraticAgent:
             display_queue.put({'done': smart_format(f"✅ session.{k} = {repr(v)}", max_str_len=500), 'source': 'system'})
             return None
         if raw_query.strip() == '/resume':
-            return r'用re.findall(r"<history>\\n\[(?:USER\|Agent)\].*?</history>", content, re.DOTALL) 扫temp/model_responses/下时间最近的10个文件(除本PID)，取每文件最后一个匹配(注意JSON里换行是字面\\n)作为该会话内容，按mtime倒序，每个用一句话总结聊了什么让我选择；选定后再简单读该文件末尾作为聊天基础'
+            return r'扫temp/model_responses/下时间最近的10个文件(除本PID)，读取每个文件content后先replace("\\n","\n").replace("\\r","\r")统一为真换行，再用re.findall(r"<history>\n\[(?:USER|Agent)\].*?</history>", content, re.DOTALL)提取，取每文件最后一个匹配作为该会话内容，按mtime倒序，每个用一句话总结聊了什么让我选择；选定后再简单读该文件末尾作为聊天基础'
         return raw_query
 
     def run(self):
@@ -208,7 +217,6 @@ class GeneraticAgent:
             self.history.append(f"[USER]: {rquery}")
             
             sys_prompt = get_system_prompt() + getattr(self.llmclient.backend, 'extra_sys_prompt', '')
-            script_dir = os.path.dirname(os.path.abspath(__file__))
             handler = GenericAgentHandler(self, self.history, os.path.join(script_dir, 'temp'))
             if self.handler and 'key_info' in self.handler.working: 
                 ki = re.sub(r'\n\[SYSTEM\] 此为.*?工作记忆[。\n]*', '', self.handler.working['key_info'])  # 去旧
@@ -250,7 +258,7 @@ class GeneraticAgent:
             # although new handler, the **full** history is in llmclient, so it is full history!
             gen = self._interruptible(agent_runner_loop(
                                 self.llmclient, sys_prompt, user_input,
-                                handler, TOOLS_SCHEMA, max_turns=40, verbose=self.verbose,
+                                handler, TOOLS_SCHEMA, max_turns=70, verbose=self.verbose,
                                 initial_user_content=initial_content))
             try:
                 full_resp = ""; last_pos = 0
@@ -357,6 +365,8 @@ if __name__ == '__main__':
                 except Exception as e: print(f'[Reflect] on_done error: {e}')
             if getattr(mod, 'ONCE', False): print('[Reflect] ONCE=True, exiting.'); break
     else:
+        try: import readline
+        except Exception: pass
         agent.inc_out = True
         while True:
             q = input('> ').strip()

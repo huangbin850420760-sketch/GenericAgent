@@ -7,6 +7,7 @@ if sys.stderr is None: sys.stderr = open(os.devnull, "w")
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from agent_loop import BaseHandler, StepOutcome, json_default
+script_dir = os.path.dirname(os.path.abspath(__file__))
 
 def code_run(code, code_type="python", timeout=60, cwd=None, code_cwd=None, stop_signal=[]):
     """代码执行器
@@ -15,7 +16,6 @@ def code_run(code, code_type="python", timeout=60, cwd=None, code_cwd=None, stop
     优先使用python，仅在必要系统操作时使用powershell"""
     preview = (code[:60].replace('\n', ' ') + '...') if len(code) > 60 else code.strip()
     yield f"[Action] Running {code_type} in {os.path.basename(cwd)}: {preview}\n"
-    script_dir = os.path.dirname(os.path.abspath(__file__))
     cwd = cwd or os.path.join(script_dir, 'temp'); tmp_path = None
     if code_type in ["python", "py"]:
         tmp_file = tempfile.NamedTemporaryFile(suffix=".ai.py", delete=False, mode='w', encoding='utf-8', dir=code_cwd)
@@ -151,7 +151,6 @@ def format_error(e):
 
 def log_memory_access(path):
     if 'memory' not in path: return
-    script_dir = os.path.dirname(os.path.abspath(__file__))
     stats_file = os.path.join(script_dir, 'memory/file_access_stats.json')
     try:
         with open(stats_file, 'r', encoding='utf-8') as f: stats = json.load(f)
@@ -225,10 +224,13 @@ def file_read(path, start=1, keyword=None, count=200, show_linenos=True):
             realcnt = len(res); L_MAX = min(max(100, 256000//max(realcnt,1)), 8000); TAG = " ... [TRUNCATED]"
             remaining = sum(1 for _ in itertools.islice(stream, 5000))
             total_lines = (res[0][0] - 1 if res else start - 1) + realcnt + remaining
-            total_tag = "[FILE] Total " + (f"{total_lines}+" if remaining >= 5000 else str(total_lines)) + ' lines\n'
+            tl_str = f"{total_lines}+" if remaining >= 5000 else str(total_lines)
+            partial = total_lines > realcnt
+            total_tag = f"[FILE] {tl_str} lines" + (f" | PARTIAL showing {realcnt}; assess need for more" if partial else "") + "\n"
             res = [(i, l if len(l) <= L_MAX else l[:L_MAX] + TAG) for i, l in res]
             result = "\n".join(f"{i}|{l}" if show_linenos else l for i, l in res)
             if show_linenos: result = total_tag + result
+            elif partial: result += f"\n\n[FILE PARTIAL: showing {realcnt}/{tl_str} lines; assess need for more]"
             _read_dirs.add(os.path.dirname(os.path.abspath(path)))
             return result
     except FileNotFoundError:
@@ -444,7 +446,7 @@ class GenericAgentHandler(BaseHandler):
     def _in_plan_mode(self): return self.working.get('in_plan_mode')
     def _exit_plan_mode(self): self.working.pop('in_plan_mode', None)
     def enter_plan_mode(self, plan_path): 
-        self.working['in_plan_mode'] = plan_path; self.max_turns = 80
+        self.working['in_plan_mode'] = plan_path; self.max_turns = 100
         print(f"[Info] Entered plan mode with plan file: {plan_path}"); return plan_path
     def _check_plan_completion(self):
         if not os.path.isfile(p:=self._in_plan_mode() or ''): return None
@@ -468,10 +470,11 @@ class GenericAgentHandler(BaseHandler):
         当模型在一轮中未显式调用任何工具时，由引擎自动触发。
         二次确认仅在回复几乎只包含<thinking>/<summary>和一段大代码块时触发。'''
         content = getattr(response, 'content', '') or ""
-        if not response or not content.strip():
+        thinking = getattr(response, 'thinking', '') or ""
+        if not response or (not content.strip() and not thinking.strip()):
             yield "[Warn] LLM returned an empty response. Retrying...\n"
             return StepOutcome({}, next_prompt="[System] Blank response, regenerate and tooluse")
-        if '未收到完整响应 !!!]' in content[-100:]:
+        if len(content) > 50 and ('未收到完整响应 !!!]' in content[-100:] or '!!!Error: [SSL:' in content[-100:]):
             return StepOutcome({}, next_prompt="[System] Incomplete response. Regenerate and tooluse.")
         if 'max_tokens !!!]' in content[-100:]:
             return StepOutcome({}, next_prompt="[System] max_tokens limit reached. Use multi small steps to do it.")
@@ -516,21 +519,22 @@ class GenericAgentHandler(BaseHandler):
         '''Agent觉得当前任务完成后有重要信息需要记忆时调用此工具。'''
         prompt = '''### [总结提炼经验] 既然你觉得当前任务有重要信息需要记忆，请提取最近一次任务中【事实验证成功且长期有效】的环境事实、用户偏好、重要步骤，更新记忆。
 本工具是标记开启结算过程，若已在更新记忆过程或没有值得记忆的点，忽略本次调用。
-**提取行动验证成功的信息**：
+**如果没有经验证的，未来能用上的信息，忽略本次调用！**
+**只能提取行动验证成功的信息**：
 - **环境事实**（路径/凭证/配置）→ `file_patch` 更新 L2，同步 L1
 - **复杂任务经验**（关键坑点/前置条件/重要步骤）→ L3 精简 SOP（只记你被坑得多次重试的核心要点）
-**禁止**：临时变量、具体推理过程、未验证信息、通用常识、你可以轻松复现的细节。
+**禁止**：临时变量、具体推理过程、未验证信息、通用常识、你可以轻松复现的细节、只是做了但没有验证的信息
 **操作**：严格遵循提供的L0的记忆更新SOP。先 `file_read` 看现有 → 判断类型 → 最小化更新 → 无新内容跳过，保证对记忆库最小局部修改。\n
 ''' + get_global_memory()
         yield "[Info] Start distilling good memory for long-term storage.\n"
         path = './memory/memory_management_sop.md'
-        if os.path.exists(path): result = file_read(path, show_linenos=False)
+        if os.path.exists(path): result = '自动读取L0内容：\n' + file_read(path, show_linenos=False)
         else: result = "Memory Management SOP not found. Do not update memory."
         return StepOutcome(result, next_prompt=prompt)
 
     def _get_anchor_prompt(self, skip=False):
         if skip: return "\n"
-        h_str = "\n".join(self.history_info[-20:])
+        h_str = "\n".join(self.history_info[-40:])
         prompt = f"\n### [WORKING MEMORY]\n<history>\n{h_str}\n</history>"
         prompt += f"\nCurrent turn: {self.current_turn}\n"
         if self.working.get('key_info'): prompt += f"\n<key_info>{self.working.get('key_info')}</key_info>"
@@ -549,10 +553,10 @@ class GenericAgentHandler(BaseHandler):
             clean_args = {k: v for k, v in args.items() if not k.startswith('_')}
             summary = f"调用工具{tool_name}, args: {clean_args}"
             if tool_name == 'no_tool': summary = "直接回答了用户问题"
-            next_prompt += "\n[DANGER] 上一轮遗漏了<summary>，需要按协议在<summary>中输出极简单行摘要！" 
+            next_prompt += "\n[DANGER] 你遗漏了<summary>，必须按协议一直在每次回复中用<summary>中输出极简单行摘要！" 
         summary = smart_format(summary, max_str_len=100)
         self.history_info.append(f'[Agent] {summary}')
-        if turn % 35 == 0 and 'plan' not in str(self.working.get('related_sop')):
+        if turn % 65 == 0 and 'plan' not in str(self.working.get('related_sop')):
             next_prompt += f"\n\n[DANGER] 已连续执行第 {turn} 轮。你必须总结情况进行ask_user，不允许继续重试。"
         elif turn % 7 == 0:
             next_prompt += f"\n\n[DANGER] 已连续执行第 {turn} 轮。禁止无效重试。若无有效进展，必须切换策略：1. 探测物理边界 2. 请求用户协助。如有需要，可调用 update_working_checkpoint 保存关键上下文。"
@@ -560,7 +564,7 @@ class GenericAgentHandler(BaseHandler):
 
         if (_plan := self._in_plan_mode()) and turn >= 10 and turn % 5 == 0:
             next_prompt = f"[Plan Hint] 你正在计划模式。必须 file_read({_plan}) 确认当前步骤，回复开头引用：📌 当前步骤：...\n\n" + next_prompt
-        if _plan and turn >= 70: next_prompt += f"\n\n[DANGER] Plan模式已运行 {turn} 轮，已达上限。必须 ask_user 汇报进度并确认是否继续。"
+        if _plan and turn >= 90: next_prompt += f"\n\n[DANGER] Plan模式已运行 {turn} 轮，已达上限。必须 ask_user 汇报进度并确认是否继续。"
 
         injkeyinfo = consume_file(self.parent.task_dir, '_keyinfo')
         injprompt = consume_file(self.parent.task_dir, '_intervene')
@@ -572,7 +576,6 @@ class GenericAgentHandler(BaseHandler):
 def get_global_memory():
     prompt = "\n"
     try:
-        script_dir = os.path.dirname(os.path.abspath(__file__))
         suffix = '_en' if os.environ.get('GA_LANG', '') == 'en' else ''
         with open(os.path.join(script_dir, 'memory/global_mem_insight.txt'), 'r', encoding='utf-8', errors='replace') as f: insight = f.read()
         with open(os.path.join(script_dir, f'assets/insight_fixed_structure{suffix}.txt'), 'r', encoding='utf-8') as f: structure = f.read()
