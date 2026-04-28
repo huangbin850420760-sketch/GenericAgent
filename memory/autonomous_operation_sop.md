@@ -29,11 +29,18 @@ print(get_todo())       # 查看待办
 - 即使失败也记录实验过程和结果，失败报告同样有价值
 - 用户不在线，遇到需要决策的问题写入报告待审，不要卡住
 
-**收尾（三件事缺一不可）**：
+**收尾（五件事缺一不可）**：
 0. 重读本sop
-1. 在cwd写报告（文件名任意），若有记忆更新建议，附在报告末尾
-2. `from/import helper; complete_task(tasktitle, historyline, report_path)` → 自动编号+移报告到 autonomous_reports/+prepend history（historyline 格式：`类型 | 主题 | 结论`，严格单行）
-3. `set_todo()` 获取TODO路径 → 将已完成条目标记为 `[x]`
+1. **产出验证门**（硬约束，必须满足至少一项）：
+   - ✅ 新增/修改了L3 SOP文件（`memory/` 下 `.md` 或 `.py`）
+   - ✅ L2事实库新增/修正了验证过的条目（`global_mem.txt`）
+   - ✅ 新增了可import的工具函数（`memory/*.py`）
+   - ❌ 三项都不满足 → 报告中必须写明原因，并给出下轮改进方向
+   - ⛔ 连续两次无产出 → 视为低价值，需重新规划
+2. 在cwd写报告（文件名任意），**必须附 `## [产出]` 段**，列出本轮沉淀的具体文件/条目
+3. `from/import helper; complete_task(tasktitle, historyline, report_path)` → 自动编号+移报告到 autonomous_reports/+prepend history（historyline 格式：`类型 | 主题 | 结论`，严格单行）
+4. `set_todo()` 获取TODO路径 → 将已完成条目标记为 `[x]`
+5. 核对：产出的文件是否已同步到L1索引（`global_mem_insight.txt`）？新文件是否在L3索引行中？
 
 ## 权限边界
 - 无需批准：只读探测、cwd内写操作/脚本实验

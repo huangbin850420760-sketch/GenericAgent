@@ -94,13 +94,28 @@ def auto_make_url(base, path):
     if b.endswith(p): return b
     return f"{b}/{p}" if re.search(r'/v\d+(/|$)', b) else f"{b}/v1/{p}"
 
+def _stamp_cache_control_safe(content):
+    """Stamp cache_control:ephemeral on the last non-whitespace block of `content` (mutates in place).
+    Skipping whitespace-only text blocks avoids 'cache_control on empty text' rejections from
+    Anthropic-compatible servers (e.g. BigModel error 1213 '未正常接收到prompt参数')."""
+    if not isinstance(content, list): return
+    for k in range(len(content) - 1, -1, -1):
+        b = content[k]
+        if not isinstance(b, dict): continue
+        if b.get("type") == "text" and not (b.get("text") or "").strip(): continue
+        content[k] = dict(b, cache_control={"type": "ephemeral"}); return
+
 def _parse_claude_sse(resp_lines):
     """Parse Anthropic SSE stream. Yields text chunks, returns list[content_block]."""
     content_blocks = []; current_block = None; tool_json_buf = ""
     stop_reason = None; got_message_stop = False; warn = None
+    pending_event = None  # last `event:` line, used as type fallback
     for line in resp_lines:
         if not line: continue
-        line = line.decode('utf-8') if isinstance(line, bytes) else line
+        line = line.decode('utf-8', errors='replace') if isinstance(line, bytes) else line
+        if line.startswith("event:"):
+            pending_event = line[6:].strip()
+            continue
         if not line.startswith("data:"): continue
         data_str = line[5:].lstrip()
         if data_str == "[DONE]": break
@@ -108,7 +123,8 @@ def _parse_claude_sse(resp_lines):
         except Exception as e:
             print(f"[SSE] JSON parse error: {e}, line: {data_str[:200]}")
             continue
-        evt_type = evt.get("type", "")
+        evt_type = evt.get("type", "") or (pending_event or "")
+        pending_event = None
         if evt_type == "message_start":
             usage = evt.get("message", {}).get("usage", {})
             _record_usage(usage, "messages")
@@ -148,9 +164,9 @@ def _parse_claude_sse(resp_lines):
         elif evt_type == "error":
             err = evt.get("error", {})
             emsg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
-            warn = f"\n\n[SSE Error: {emsg}]"; break
+            warn = f"\n\n!!!Error: SSE {emsg}"; break
     if not warn:
-        if not got_message_stop and not stop_reason: warn = "\n\n[!!! 流异常中断，未收到完整响应 !!!]"
+        if not got_message_stop and not stop_reason: warn = "\n\n!!!Error: SSE stream interrupted, incomplete response"
         elif stop_reason == "max_tokens": warn = "\n\n[!!! Response truncated: max_tokens !!!]"
     if warn:
         print(f"[WARN] {warn.strip()}")
@@ -290,7 +306,7 @@ def _stamp_oai_cache_markers(messages, model):
         if isinstance(c, str):
             messages[idx] = {**messages[idx], 'content': [{'type': 'text', 'text': c, 'cache_control': {'type': 'ephemeral'}}]}
         elif isinstance(c, list) and c:
-            c = list(c); c[-1] = dict(c[-1], cache_control={'type': 'ephemeral'})
+            c = list(c); _stamp_cache_control_safe(c)
             messages[idx] = {**messages[idx], 'content': c}
 
 def _openai_stream(api_base, api_key, messages, model, api_mode='chat_completions', *,
@@ -549,7 +565,7 @@ class ClaudeSession(BaseSession):
         msgs = [{"role": m['role'], "content": list(m['content'])} for m in raw_list]
         user_idxs = [i for i, m in enumerate(msgs) if m['role'] == 'user']
         for idx in user_idxs[-2:]:
-            msgs[idx]["content"][-1] = dict(msgs[idx]["content"][-1], cache_control={"type": "ephemeral"})
+            _stamp_cache_control_safe(msgs[idx]["content"])
         return msgs
 
 class LLMSession(BaseSession):
@@ -559,6 +575,21 @@ class LLMSession(BaseSession):
                                   max_tokens=self.max_tokens, max_retries=self.max_retries, stream=self.stream,
                                   connect_timeout=self.connect_timeout, read_timeout=self.read_timeout, proxies=self.proxies))
     def make_messages(self, raw_list): return _msgs_claude2oai(raw_list)
+
+def _strip_trailing_whitespace_blocks(content):
+    """Remove trailing whitespace-only text blocks from a content list (in place).
+    Some Anthropic-compatible servers (BigModel: error 1213 '未正常接收到prompt参数')
+    reject user messages whose last block is a whitespace-only text. The trailing
+    `\\n` blocks come from `_fix_messages` separators when the merged-in message
+    has no substantive content; they carry no semantic value and are safe to drop.
+    Internal whitespace blocks between substantive blocks are preserved for readability."""
+    if not isinstance(content, list): return content
+    while content:
+        b = content[-1]
+        if isinstance(b, dict) and b.get("type") == "text" and not (b.get("text") or "").strip():
+            content.pop()
+        else: break
+    return content
 
 def _fix_messages(messages):
     """修复 messages 符合 Claude API：交替、tool_use/tool_result 配对"""
@@ -575,6 +606,14 @@ def _fix_messages(messages):
             if miss: m = {**m, 'content': [{"type": "tool_result", "tool_use_id": uid, "content": "(error)"} for uid in miss] + _wrap(m['content'])}
         fixed.append(m)
     while fixed and fixed[0]['role'] != 'user': fixed.pop(0)
+    # Strip trailing whitespace-only text blocks from each message's content. Such blocks
+    # are leftover separators that BigModel's anthropic-compat layer rejects.
+    for m in fixed:
+        c = m.get('content')
+        if isinstance(c, list):
+            new_c = list(c); _strip_trailing_whitespace_blocks(new_c)
+            if not new_c: new_c = [{"type": "text", "text": "(empty)"}]  # keep at least one block
+            if new_c is not c: m['content'] = new_c
     return fixed
 
 class NativeClaudeSession(BaseSession):
@@ -614,7 +653,7 @@ class NativeClaudeSession(BaseSession):
         user_idxs = [i for i, m in enumerate(messages) if m['role'] == 'user']
         for idx in user_idxs[-2:]:
             messages[idx] = {**messages[idx], "content": list(messages[idx]["content"])}
-            messages[idx]["content"][-1] = dict(messages[idx]["content"][-1], cache_control={"type": "ephemeral"})
+            _stamp_cache_control_safe(messages[idx]["content"])
         try:
             with requests.post(auto_make_url(self.api_base, "messages")+'?beta=true', headers=headers, json=payload, stream=self.stream, timeout=(self.connect_timeout, self.read_timeout)) as resp:
                 if resp.status_code != 200: raise Exception(f"HTTP {resp.status_code} {resp.content.decode('utf-8', errors='replace')[:500]}")
