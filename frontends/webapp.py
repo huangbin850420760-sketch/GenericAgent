@@ -1056,13 +1056,30 @@ def find_free_port(start=18520, tries=50):
     raise RuntimeError('no free port')
 
 
+class _ThreadedWSGIServer(bottle.ServerAdapter):
+    """Multi-threaded stdlib WSGI server. Avoids head-of-line blocking when one
+    request (e.g. /api/complete waiting on LLM) holds the server. No external
+    deps."""
+    def run(self, handler):  # noqa: D401
+        from wsgiref.simple_server import make_server, WSGIServer
+        from socketserver import ThreadingMixIn
+
+        class ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
+            daemon_threads = True
+
+        srv = make_server(self.host, self.port, handler,
+                          server_class=ThreadingWSGIServer)
+        srv.serve_forever()
+
+
 def run_server(http_port, ws_port):
     os.environ['WEBAPP_WS_PORT'] = str(ws_port)
     ws_server = WebSocketServer('127.0.0.1', ws_port, ChatWS)
     threading.Thread(target=ws_server.serve_forever, daemon=True).start()
     print(f'[webapp] WS on ws://127.0.0.1:{ws_port}')
     print(f'[webapp] HTTP on http://127.0.0.1:{http_port}')
-    bottle.run(app, host='127.0.0.1', port=http_port, quiet=True, debug=False)
+    bottle.run(app, host='127.0.0.1', port=http_port, quiet=True, debug=False,
+               server=_ThreadedWSGIServer)
 
 
 if __name__ == '__main__':
