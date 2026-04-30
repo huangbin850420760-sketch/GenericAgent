@@ -957,8 +957,12 @@ def _pick_completion_cfg():
     for k, v in mk.items():
         if not isinstance(v, dict): continue
         if 'apikey' not in v or 'apibase' not in v: continue
-        # Only OpenAI-compatible (skip anthropic-only configs)
-        if 'claude' in k.lower() and 'native' in k.lower(): continue
+        # Only OpenAI-compatible. Detect Anthropic-native by apibase host
+        # (api.anthropic.com), not by key name — names can be misleading
+        # (e.g. "native_claude_config_2" may actually point at GLM/Qwen
+        # which speak OAI protocol).
+        base = (v.get('apibase') or '').lower()
+        if 'api.anthropic.com' in base: continue
         candidates.append((k, v))
     if not candidates:
         return None
