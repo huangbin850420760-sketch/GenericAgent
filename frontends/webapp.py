@@ -928,6 +928,92 @@ def _api_config_backup_py():
         return _json({'error': str(e)}, 500)
 
 
+# ── Inline code completion ────────────────────────────────────────────────
+# Stateless single-shot endpoint for editor ghost-text. Bypasses the agent loop
+# (no tools, no history) and directly hits an OAI-compatible chat-completion
+# endpoint chosen from mykey.json. Tuned for low latency and small max_tokens.
+_COMPLETION_SYSTEM = (
+    "You are an inline code completion engine embedded in an IDE. "
+    "Given the prefix and suffix of a source file, output ONLY the text that "
+    "should be inserted at the cursor (between prefix and suffix). "
+    "Rules:\n"
+    "- No explanation, no markdown fences, no language identifiers.\n"
+    "- Output the completion as-is, ready to insert verbatim.\n"
+    "- Prefer short, focused completions (1-10 lines). Stop at a natural boundary.\n"
+    "- If unsure, output an empty string.\n"
+    "- Do NOT repeat the prefix or suffix."
+)
+
+
+def _pick_completion_cfg():
+    """Pick the cheapest oai-compatible config for completion. Prefer keys
+    containing 'mini' / 'flash' / 'turbo' / 'fast'; fall back to any oai-style."""
+    try:
+        from llmcore import _load_mykeys
+        mk = _load_mykeys()
+    except Exception:
+        return None
+    candidates = []
+    for k, v in mk.items():
+        if not isinstance(v, dict): continue
+        if 'apikey' not in v or 'apibase' not in v: continue
+        # Only OpenAI-compatible (skip anthropic-only configs)
+        if 'claude' in k.lower() and 'native' in k.lower(): continue
+        candidates.append((k, v))
+    if not candidates:
+        return None
+    cheap = [c for c in candidates if any(t in (c[1].get('model') or '').lower()
+                                          for t in ('mini', 'flash', 'turbo', 'fast', 'haiku'))]
+    return (cheap or candidates)[0][1]
+
+
+@app.route('/api/complete', method='POST')
+def _api_complete():
+    try:
+        body = json.loads(request.body.read() or b'{}')
+    except Exception:
+        return _json({'error': 'invalid JSON'}, 400)
+    prefix = (body.get('prefix') or '')[-3000:]
+    suffix = (body.get('suffix') or '')[:1000]
+    lang   = (body.get('lang')   or '').strip()
+    max_toks = max(8, min(200, int(body.get('max_tokens') or 80)))
+    if not prefix and not suffix:
+        return _json({'completion': ''})
+    cfg = _pick_completion_cfg()
+    if not cfg:
+        return _json({'error': 'no oai-compatible LLM configured'}, 400)
+    model = cfg.get('model') or 'gpt-4o-mini'
+    base  = (cfg.get('apibase') or '').rstrip('/')
+    if not re.search(r'/v\d+(/|$)', base):
+        base = base + '/v1'
+    url = base + '/chat/completions'
+    headers = {'Content-Type': 'application/json',
+               'Authorization': 'Bearer ' + cfg['apikey']}
+    user_msg = f"<lang>{lang}</lang>\n<prefix>\n{prefix}\n</prefix>\n<suffix>\n{suffix}\n</suffix>\n\nCompletion:"
+    payload = {
+        'model': model,
+        'messages': [{'role': 'system', 'content': _COMPLETION_SYSTEM},
+                     {'role': 'user',   'content': user_msg}],
+        'max_tokens': max_toks,
+        'temperature': 0.2,
+        'stream': False,
+    }
+    try:
+        import requests as _req
+        r = _req.post(url, headers=headers, json=payload, timeout=(5, 25),
+                      proxies=cfg.get('proxies'))
+        if r.status_code != 200:
+            return _json({'error': f'HTTP {r.status_code}: {r.text[:200]}'}, 502)
+        data = r.json()
+        text = (data.get('choices') or [{}])[0].get('message', {}).get('content', '') or ''
+        # Defensive cleanup: strip markdown fences if model still emits them.
+        text = re.sub(r'^```[\w-]*\n?', '', text)
+        text = re.sub(r'\n?```\s*$', '', text)
+        return _json({'completion': text, 'model': model})
+    except Exception as e:
+        return _json({'error': str(e)}, 502)
+
+
 def find_free_port(start=18520, tries=50):
     for p in range(start, start + tries):
         try:
