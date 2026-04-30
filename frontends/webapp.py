@@ -945,9 +945,18 @@ _COMPLETION_SYSTEM = (
 )
 
 
+def _detect_proto(apibase: str) -> str:
+    """Return 'anthropic' or 'oai' based on apibase URL."""
+    b = (apibase or '').lower()
+    if 'api.anthropic.com' in b or '/anthropic' in b:
+        return 'anthropic'
+    return 'oai'
+
+
 def _pick_completion_cfg():
-    """Pick the cheapest oai-compatible config for completion. Prefer keys
-    containing 'mini' / 'flash' / 'turbo' / 'fast'; fall back to any oai-style."""
+    """Pick the cheapest LLM config for completion. Supports both OAI-compatible
+    and Anthropic-Messages protocols. Prefer keys containing 'mini' / 'flash' /
+    'turbo' / 'fast' / 'haiku' / 'air'; fall back to any usable config."""
     try:
         from llmcore import _load_mykeys
         mk = _load_mykeys()
@@ -957,17 +966,11 @@ def _pick_completion_cfg():
     for k, v in mk.items():
         if not isinstance(v, dict): continue
         if 'apikey' not in v or 'apibase' not in v: continue
-        # Only OpenAI-compatible. Detect Anthropic-native by apibase host
-        # (api.anthropic.com), not by key name — names can be misleading
-        # (e.g. "native_claude_config_2" may actually point at GLM/Qwen
-        # which speak OAI protocol).
-        base = (v.get('apibase') or '').lower()
-        if 'api.anthropic.com' in base: continue
         candidates.append((k, v))
     if not candidates:
         return None
     cheap = [c for c in candidates if any(t in (c[1].get('model') or '').lower()
-                                          for t in ('mini', 'flash', 'turbo', 'fast', 'haiku'))]
+                                          for t in ('mini', 'flash', 'turbo', 'fast', 'haiku', 'air'))]
     return (cheap or candidates)[0][1]
 
 
@@ -985,35 +988,62 @@ def _api_complete():
         return _json({'completion': ''})
     cfg = _pick_completion_cfg()
     if not cfg:
-        return _json({'error': 'no oai-compatible LLM configured'}, 400)
+        return _json({'error': 'no LLM configured (need apikey+apibase in mykey.json)'}, 400)
     model = cfg.get('model') or 'gpt-4o-mini'
     base  = (cfg.get('apibase') or '').rstrip('/')
     if not re.search(r'/v\d+(/|$)', base):
         base = base + '/v1'
-    url = base + '/chat/completions'
-    headers = {'Content-Type': 'application/json',
-               'Authorization': 'Bearer ' + cfg['apikey']}
+    proto = _detect_proto(cfg.get('apibase') or '')
     user_msg = f"<lang>{lang}</lang>\n<prefix>\n{prefix}\n</prefix>\n<suffix>\n{suffix}\n</suffix>\n\nCompletion:"
-    payload = {
-        'model': model,
-        'messages': [{'role': 'system', 'content': _COMPLETION_SYSTEM},
-                     {'role': 'user',   'content': user_msg}],
-        'max_tokens': max_toks,
-        'temperature': 0.2,
-        'stream': False,
-    }
     try:
         import requests as _req
-        r = _req.post(url, headers=headers, json=payload, timeout=(5, 25),
-                      proxies=cfg.get('proxies'))
-        if r.status_code != 200:
-            return _json({'error': f'HTTP {r.status_code}: {r.text[:200]}'}, 502)
-        data = r.json()
-        text = (data.get('choices') or [{}])[0].get('message', {}).get('content', '') or ''
+        if proto == 'anthropic':
+            url = base + '/messages'
+            headers = {
+                'Content-Type': 'application/json',
+                'x-api-key': cfg['apikey'],
+                'anthropic-version': '2023-06-01',
+            }
+            payload = {
+                'model': model,
+                'system': _COMPLETION_SYSTEM,
+                'messages': [{'role': 'user', 'content': user_msg}],
+                'max_tokens': max_toks,
+                'temperature': 0.2,
+                'stream': False,
+            }
+            r = _req.post(url, headers=headers, json=payload, timeout=(5, 25),
+                          proxies=cfg.get('proxies'))
+            if r.status_code != 200:
+                return _json({'error': f'HTTP {r.status_code}: {r.text[:200]}'}, 502)
+            data = r.json()
+            blocks = data.get('content') or []
+            text = ''
+            for b in blocks:
+                if isinstance(b, dict) and b.get('type') == 'text':
+                    text += b.get('text') or ''
+        else:
+            url = base + '/chat/completions'
+            headers = {'Content-Type': 'application/json',
+                       'Authorization': 'Bearer ' + cfg['apikey']}
+            payload = {
+                'model': model,
+                'messages': [{'role': 'system', 'content': _COMPLETION_SYSTEM},
+                             {'role': 'user',   'content': user_msg}],
+                'max_tokens': max_toks,
+                'temperature': 0.2,
+                'stream': False,
+            }
+            r = _req.post(url, headers=headers, json=payload, timeout=(5, 25),
+                          proxies=cfg.get('proxies'))
+            if r.status_code != 200:
+                return _json({'error': f'HTTP {r.status_code}: {r.text[:200]}'}, 502)
+            data = r.json()
+            text = (data.get('choices') or [{}])[0].get('message', {}).get('content', '') or ''
         # Defensive cleanup: strip markdown fences if model still emits them.
         text = re.sub(r'^```[\w-]*\n?', '', text)
         text = re.sub(r'\n?```\s*$', '', text)
-        return _json({'completion': text, 'model': model})
+        return _json({'completion': text, 'model': model, 'proto': proto})
     except Exception as e:
         return _json({'error': str(e)}, 502)
 
