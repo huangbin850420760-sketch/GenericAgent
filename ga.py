@@ -284,6 +284,17 @@ class GenericAgentHandler(BaseHandler):
         if not code:
             code = self._extract_code_block(response, code_type)
             if not code: return StepOutcome("[Error] Code missing. Must use reply code block or 'script' arg.", next_prompt="\n")
+        # Permission gate (P1): block until user approves in IDE, unless bypass
+        # is on. Falls open transparently when no IDE is connected.
+        try:
+            import permissions as _perm
+            preview_args = dict(args); preview_args['code'] = code
+            approved, reason = _perm.request_approval('code_run', preview_args)
+            if not approved:
+                yield f"[Status] ⛔ 已拒绝执行: {reason}\n"
+                return StepOutcome({"status": "rejected", "msg": reason}, next_prompt="\n")
+        except Exception as _perm_err:
+            print(f'[do_code_run] permission gate failed open: {_perm_err}')
         timeout = args.get("timeout", 60)
         raw_path = os.path.join(self.cwd, args.get("cwd", './'))
         cwd = os.path.normpath(os.path.abspath(raw_path))

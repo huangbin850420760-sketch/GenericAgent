@@ -110,6 +110,7 @@ WS_CONNS = set()
 _PROTO_VERSION = 1
 _SERVER_FEATURES = [
     'edit_file', 'open_file', 'run_terminal', 'show_diff', 'context_push', 'diff_preview',
+    'tool_approval',
 ]
 
 def _git_sha():
@@ -207,6 +208,20 @@ class ChatWS(WebSocket):
             elif t == 'apply_edit_result':
                 # Response to a previous edit_file request — deliver to waiter.
                 ide_bridge.deliver_response(msg.get('id', ''), msg.get('payload') or {})
+            elif t == 'tool_approval_response':
+                # Response to a previous tool_approval_request — deliver to waiter.
+                ide_bridge.deliver_response(msg.get('id', ''), msg.get('payload') or {})
+            elif t == 'set_bypass':
+                # Toggle the global permission-bypass flag.
+                try:
+                    import permissions as _perm
+                    enabled = bool((msg.get('payload') or {}).get('enabled'))
+                    _perm.set_bypass(enabled)
+                    _send(self, {'type': 'info',
+                                 'payload': '⚠️ Bypass 已开启：所有工具将免审批' if enabled
+                                            else '✅ Bypass 已关闭：风险动作恢复审批'})
+                except Exception as e:
+                    _send(self, {'type': 'error', 'payload': f'set_bypass: {e}'})
             elif t == 'context':
                 # IDE pushed editor state (active file, selection, open files, root).
                 ide_bridge.set_context(msg.get('payload') or {})

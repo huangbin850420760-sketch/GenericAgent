@@ -1,0 +1,144 @@
+{
+  "version": "1.0.0",
+  "lastScanned": 1777444741850,
+  "projectRoot": "e:\\huangbin850420760\\GenericAgent",
+  "techStack": {
+    "languages": [
+      {
+        "name": "Python",
+        "version": null,
+        "confidence": "high",
+        "markers": [
+          "pyproject.toml"
+        ]
+      }
+    ],
+    "frameworks": [],
+    "packageManager": null,
+    "runtime": null
+  },
+  "build": {
+    "buildCommand": null,
+    "testCommand": "pytest",
+    "lintCommand": "ruff check",
+    "devCommand": null,
+    "scripts": {}
+  },
+  "conventions": {
+    "namingStyle": null,
+    "importStyle": null,
+    "testPattern": null,
+    "fileOrganization": null
+  },
+  "structure": {
+    "isMonorepo": false,
+    "workspaces": [],
+    "mainDirectories": [
+      "assets"
+    ],
+    "gitBranches": {
+      "defaultBranch": "main",
+      "branchingStrategy": null
+    }
+  },
+  "customNotes": [],
+  "directoryMap": {
+    "assets": {
+      "path": "assets",
+      "purpose": "Static assets",
+      "fileCount": 14,
+      "lastAccessed": 1777444741799,
+      "keyFiles": [
+        "code_run_header.py",
+        "GenericAgent_Technical_Report.pdf",
+        "global_mem_insight_template.txt",
+        "global_mem_insight_template_en.txt",
+        "insight_fixed_structure.txt"
+      ]
+    },
+    "frontends": {
+      "path": "frontends",
+      "purpose": null,
+      "fileCount": 17,
+      "lastAccessed": 1777444741800,
+      "keyFiles": [
+        "chatapp_common.py",
+        "chat_bubble.png",
+        "continue_cmd.py",
+        "desktop_pet.pyw",
+        "DESKTOP_PET_README.md"
+      ]
+    },
+    "memory": {
+      "path": "memory",
+      "purpose": null,
+      "fileCount": 25,
+      "lastAccessed": 1777444741800,
+      "keyFiles": [
+        "adb_ui.py",
+        "autonomous_operation_sop.md",
+        "cua_reference.md",
+        "file_access_stats.json",
+        "github_contribution_sop.md"
+      ]
+    },
+    "plugins": {
+      "path": "plugins",
+      "purpose": null,
+      "fileCount": 1,
+      "lastAccessed": 1777444741801,
+      "keyFiles": [
+        "langfuse_tracing.py"
+      ]
+    },
+    "reflect": {
+      "path": "reflect",
+      "purpose": null,
+      "fileCount": 2,
+      "lastAccessed": 1777444741802,
+      "keyFiles": [
+        "autonomous.py",
+        "scheduler.py"
+      ]
+    },
+    "sche_tasks": {
+      "path": "sche_tasks",
+      "purpose": null,
+      "fileCount": 3,
+      "lastAccessed": 1777444741802,
+      "keyFiles": [
+        "scheduler.log",
+        "scheduler_run.log",
+        "zhipu_coding_max.json"
+      ]
+    },
+    "temp": {
+      "path": "temp",
+      "purpose": null,
+      "fileCount": 39,
+      "lastAccessed": 1777444741803,
+      "keyFiles": [
+        "after_confirm.png",
+        "app.7c556ecc.js",
+        "bijian_all_packages.json",
+        "bijian_api_explore.json",
+        "bijian_api_results1.json"
+      ]
+    },
+    "__pycache__": {
+      "path": "__pycache__",
+      "purpose": null,
+      "fileCount": 16,
+      "lastAccessed": 1777444741803,
+      "keyFiles": [
+        "agentmain.cpython-310.pyc",
+        "agentmain.cpython-311.pyc",
+        "agent_loop.cpython-310.pyc",
+        "agent_loop.cpython-311.pyc",
+        "ga.cpython-310.pyc"
+      ]
+    }
+  },
+  "hotPaths": [],
+  "userDirectives": []
+}
