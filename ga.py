@@ -9,7 +9,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from agent_loop import BaseHandler, StepOutcome, json_default
 script_dir = os.path.dirname(os.path.abspath(__file__))
 
-def code_run(code, code_type="python", timeout=60, cwd=None, code_cwd=None, stop_signal=[]):
+def code_run(code, code_type="python", timeout=60, cwd=None, code_cwd=None, stop_signal=None):
     """代码执行器
     python: 运行复杂的 .py 脚本（文件模式）
     powershell/bash: 运行单行指令（命令模式）
@@ -59,7 +59,7 @@ def code_run(code, code_type="python", timeout=60, cwd=None, code_cwd=None, stop
 
         while t.is_alive():
             istimeout = time.time() - start_t > timeout
-            if istimeout or len(stop_signal) > 0:
+            if istimeout or stop_signal:
                 process.kill()
                 print("[Debug] Process killed due to timeout or stop signal.")
                 if istimeout: full_stdout.append("\n[Timeout Error] 超时强制终止")
@@ -295,12 +295,13 @@ class GenericAgentHandler(BaseHandler):
                 return StepOutcome({"status": "rejected", "msg": reason}, next_prompt="\n")
         except Exception as _perm_err:
             print(f'[do_code_run] permission gate failed open: {_perm_err}')
-        timeout = args.get("timeout", 60)
+        try: timeout = int(args.get("timeout", 60))
+        except: timeout = 60
         raw_path = os.path.join(self.cwd, args.get("cwd", './'))
         cwd = os.path.normpath(os.path.abspath(raw_path))
         code_cwd = os.path.normpath(self.cwd)
         if code_type == 'python' and args.get("inline_eval"):
-            ns = {'handler': self, 'parent': self.parent}
+            ns = {'handler':self, 'parent':self.parent, 'history':json.dumps(self.parent.llmclient.backend.history)}
             old_cwd = os.getcwd()
             try:
                 os.chdir(cwd)
@@ -385,18 +386,18 @@ class GenericAgentHandler(BaseHandler):
         yield f"[Action] {action_str} file: {os.path.basename(path)}\n"
 
         def extract_robust_content(text):
-            tag = re.search(r"<file_content[^>]*>(.*)</file_content>", text, re.DOTALL)
-            if tag: return tag.group(1).strip()
-            s, e = text.find("```"), text.rfind("```")
-            if -1 < s < e: return text[text.find("\n", s)+1 : e].strip()
+            tags = re.findall(r"<file_content[^>]*>(.*?)</file_content>", text, re.DOTALL)
+            if tags: return tags[-1].strip()
+            blocks = re.findall(r"```[^\n]*\n([\s\S]*?)```", text)
+            if blocks: return blocks[-1].strip()
             return None
         
-        blocks = extract_robust_content(response.content)
-        if not blocks:
+        content = args.get('content') or extract_robust_content(response.content)
+        if not content:
             yield f"[Status] ❌ 失败: 未在回复中找到<file_content>代码块内容\n"
-            return StepOutcome({"status": "error", "msg": "No content found. Put content inside <file_content>...</file_content> tags in your reply body before call file_write."}, next_prompt="\n")
+            return StepOutcome({"status": "error", "msg": "No content found. Blank is not supported. Put content inside <file_content>...</file_content> tags in your reply body before call file_write."}, next_prompt="\n")
         try:
-            new_content = expand_file_refs(blocks, base_dir=self.cwd)
+            new_content = expand_file_refs(content, base_dir=self.cwd)
 
             # IDE mode: delegate to the connected editor so the user sees an
             # inline diff and can accept/reject before anything lands on disk.
@@ -484,6 +485,8 @@ class GenericAgentHandler(BaseHandler):
         content = getattr(response, 'content', '') or ""
         thinking = getattr(response, 'thinking', '') or ""
         if not response or (not content.strip() and not thinking.strip()):
+            self._empty_ct = getattr(self, '_empty_ct', 0) + 1
+            if self._empty_ct >= 3: return StepOutcome({}, should_exit=True)
             yield "[Warn] LLM returned an empty response. Retrying...\n"
             return StepOutcome({}, next_prompt="[System] Blank response, regenerate and tooluse")
         if len(content) > 50 and ('[!!! 流异常中断' in content[-100:] or '!!!Error:' in content[-100:]):
@@ -540,14 +543,30 @@ class GenericAgentHandler(BaseHandler):
 ''' + get_global_memory()
         yield "[Info] Start distilling good memory for long-term storage.\n"
         path = './memory/memory_management_sop.md'
-        if os.path.exists(path): result = '自动读取L0内容：\n' + file_read(path, show_linenos=False)
+        if os.path.exists(path): result = 'This is L0:\n' + file_read(path, show_linenos=False)
         else: result = "Memory Management SOP not found. Do not update memory."
         return StepOutcome(result, next_prompt=prompt)
 
+    def _fold_earlier(self, lines):
+        FALLBACK = '直接回答了用户问题'
+        parts, cnt, last = [], 0, ''
+        def flush():
+            if cnt:
+                if FALLBACK in last: parts.append(f'[Agent]（{cnt} turns）')
+                else: parts.append(f'{last}（{cnt} turns）')
+        for line in lines:
+            if line.startswith('[USER]'):
+                flush(); parts.append(line); cnt = 0; last = ''
+            else: cnt += 1; last = line
+        flush()
+        return "\n".join(parts[-150:])
+
     def _get_anchor_prompt(self, skip=False):
         if skip: return "\n"
-        h_str = "\n".join(self.history_info[-40:])
-        prompt = f"\n### [WORKING MEMORY]\n<history>\n{h_str}\n</history>"
+        h = self.history_info; W = 30
+        earlier = f'<earlier_context>\n{self._fold_earlier(h[:-W])}\n</earlier_context>\n' if len(h) > W else ""
+        h_str = "\n".join(h[-W:])
+        prompt = f"\n### [WORKING MEMORY]\n{earlier}<history>\n{h_str}\n</history>"
         prompt += f"\nCurrent turn: {self.current_turn}\n"
         if self.working.get('key_info'): prompt += f"\n<key_info>{self.working.get('key_info')}</key_info>"
         if self.working.get('related_sop'): prompt += f"\n有不清晰的地方请再次读取{self.working.get('related_sop')}"
@@ -555,7 +574,7 @@ class GenericAgentHandler(BaseHandler):
             try: print(prompt)
             except: pass
         return prompt
-
+    
     def turn_end_callback(self, response, tool_calls, tool_results, turn, next_prompt, exit_reason):
         _c = re.sub(r'```.*?```|<thinking>.*?</thinking>', '', response.content, flags=re.DOTALL)
         rsumm = re.search(r"<summary>(.*?)</summary>", _c, re.DOTALL)
@@ -565,17 +584,19 @@ class GenericAgentHandler(BaseHandler):
             clean_args = {k: v for k, v in args.items() if not k.startswith('_')}
             summary = f"调用工具{tool_name}, args: {clean_args}"
             if tool_name == 'no_tool': summary = "直接回答了用户问题"
-            next_prompt += "\n[DANGER] 你遗漏了<summary>，必须按协议一直在每次回复中用<summary>中输出极简单行摘要！" 
-        summary = smart_format(summary, max_str_len=100)
+            next_prompt += "\n\n\n[SYSTEM] 必须在回复文本中包含<summary>！\n\n"
+        summary = smart_format(summary.replace('\n', ''), max_str_len=80)
         self.history_info.append(f'[Agent] {summary}')
-        if turn % 65 == 0 and 'plan' not in str(self.working.get('related_sop')):
-            next_prompt += f"\n\n[DANGER] 已连续执行第 {turn} 轮。你必须总结情况进行ask_user，不允许继续重试。"
+        _plan = self._in_plan_mode()
+
+        if turn % 65 == 0 and (not _plan):
+            next_prompt += f"\n\n[DANGER] 已连续执行第 {turn} 轮。必须总结情况进行ask_user，不允许继续重试。"
         elif turn % 7 == 0:
             next_prompt += f"\n\n[DANGER] 已连续执行第 {turn} 轮。禁止无效重试。若无有效进展，必须切换策略：1. 探测物理边界 2. 请求用户协助。如有需要，可调用 update_working_checkpoint 保存关键上下文。"
         elif turn % 10 == 0: next_prompt += get_global_memory()
 
-        if (_plan := self._in_plan_mode()) and turn >= 10 and turn % 5 == 0:
-            next_prompt = f"[Plan Hint] 你正在计划模式。必须 file_read({_plan}) 确认当前步骤，回复开头引用：📌 当前步骤：...\n\n" + next_prompt
+        if _plan and turn >= 10 and turn % 5 == 0:
+            next_prompt = f"[Plan Hint] 正在计划模式。必须 file_read({_plan}) 确认当前步骤，回复开头引用：📌 当前步骤：...\n\n" + next_prompt
         if _plan and turn >= 90: next_prompt += f"\n\n[DANGER] Plan模式已运行 {turn} 轮，已达上限。必须 ask_user 汇报进度并确认是否继续。"
 
         injkeyinfo = consume_file(self.parent.task_dir, '_keyinfo')

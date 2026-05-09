@@ -63,6 +63,7 @@ class WxBotClient:
         if url:
             img = self._tf.parent / 'wx_qr.png'
             qrcode.make(url).save(str(img)); webbrowser.open(str(img))
+            qr = qrcode.QRCode(border=1); qr.add_data(url); qr.make(fit=True); qr.print_ascii(invert=True)
         last = ''
         while True:
             time.sleep(poll_interval)
@@ -106,6 +107,11 @@ class WxBotClient:
             'ilink_user_id': to_user_id, 'typing_ticket': typing_ticket,
             'status': 2 if cancel else 1,
             'base_info': {'channel_version': VER}})
+
+    def get_typing_ticket(self, to_user_id, context_token=''):
+        payload = {'ilink_user_id': to_user_id}
+        if context_token: payload['context_token'] = context_token
+        return self._post('ilink/bot/getconfig', payload).get('typing_ticket', '')
 
     def _enc(self, raw, aes_key):
         pad = 16 - (len(raw) % 16)
@@ -259,22 +265,29 @@ _TAG_PATS = [r'<' + t + r'>.*?</' + t + r'>' for t in ('thinking', 'tool_use')]
 _TAG_PATS.append(r'<file_content>.*?</file_content>')
 
 def _strip_md(t):
+    """Filter markdown for WeChat rich-text rendering.
+    WeChat natively renders: code fences, inline code, bold, italic,
+    H1-H4 headings, horizontal rules, tables. We only strip unsupported syntax."""
     def _trunc_code(m):
-        body = m.group().strip('`')
-        if '\n' not in body: return body
-        lines = body.split('\n', 1)[-1].split('\n')  # drop language line
-        if len(lines) > 10: return '\n'.join(lines[:10]) + '\n...'
-        return '\n'.join(lines)
+        full = m.group()
+        fence = re.match(r'`{3,}', full).group()
+        rest = full[len(fence):-len(fence)]
+        if '\n' not in rest: return full  # single-line, keep as-is
+        lang_line, _, body = rest.partition('\n')
+        lines = body.split('\n')
+        if len(lines) > 10:
+            return f'{fence}{lang_line}\n' + '\n'.join(lines[:10]) + '\n...\n' + fence
+        return full  # keep intact
     t = re.sub(r'(`{3,})[\s\S]*?\1', _trunc_code, t)
-    t = re.sub(r'`([^`]+)`', r'\1', t)
-    t = re.sub(r'!\[.*?\]\(.*?\)', '', t)
-    t = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', t)
-    t = re.sub(r'^#{1,6}\s+', '', t, flags=re.M)
-    t = re.sub(r'(\*{1,3})(.*?)\1', r'\2', t)
-    t = re.sub(r'^\s*[-*+]\s+', '• ', t, flags=re.M)
-    t = re.sub(r'^\s*\d+\.\s+', '', t, flags=re.M)
-    t = re.sub(r'^\s*>\s?', '', t, flags=re.M)
-    t = re.sub(r'^---+$', '', t, flags=re.M)
+    # inline code: keep (WeChat renders it)
+    # bold/italic (*/**/***): keep (WeChat renders it)
+    t = re.sub(r'!\[.*?\]\(.*?\)', '', t)                        # images: remove
+    t = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', t)              # links: text only
+    t = re.sub(r'^#{5,6}\s+', '', t, flags=re.M)                 # H5-H6: strip (H1-H4 kept)
+    t = re.sub(r'^\s*[-*+]\s+', '• ', t, flags=re.M)             # unordered list: bullet
+    t = re.sub(r'^\s*\d+\.\s+', '', t, flags=re.M)               # ordered list: strip num
+    t = re.sub(r'^\s*>\s?', '', t, flags=re.M)                   # blockquote: strip
+    # horizontal rules (---): keep (WeChat renders it)
     return re.sub(r'\n{3,}', '\n\n', t).strip()
 
 def _clean(t):
@@ -283,7 +296,7 @@ def _clean(t):
     for p in _TAG_PATS:
         t = re.sub(p, '', t, flags=re.DOTALL)
     t = re.sub(r'</?summary>', '', t)
-    return re.sub(r'\n{3,}', '\n\n', _strip_md(t)).strip() or '...'
+    return re.sub(r'\n{3,}', '\n\n', _strip_md(t)).strip()
 
 def _turn_parts(t):
     _ph = []
@@ -323,10 +336,17 @@ def on_message(bot, msg):
         return
 
     def _handle():
-        prompt = f"If you need to show files to user, use [FILE:filepath] in your response.\n\n{text}"
+        prompt = text if text.startswith('/') else f"If you need to show files to user, use [FILE:filepath] in your response.\n\n{text}"
         dq = agent.put_task(prompt, source="wechat")
-        try: bot.send_typing(uid)
-        except: pass
+        _typing_stop = threading.Event()
+        def _keep_typing():
+            ticket = bot.get_typing_ticket(uid, ctx)
+            if not ticket: return
+            while not _typing_stop.is_set():
+                try: bot.send_typing(uid, ticket)
+                except: pass
+                _typing_stop.wait(2.0)
+        threading.Thread(target=_keep_typing, daemon=True).start()
         result = ''; sent = 0; mi = 0; last_send = 0
         def _wx_send(text):
             s = text.strip(); t0 = time.time()
@@ -356,6 +376,7 @@ def on_message(bot, msg):
                     if _send(merged):
                         sent = len(done)
         except queue.Empty: result = '[超时]'
+        _typing_stop.set()
         done, partial = _turn_parts(result)
         rest = '\n\n'.join(done[sent:] + [partial] + ['\n\n[任务已完成]'])
         if rest.strip(): _wx_send((_clean(rest))[-2000:])
