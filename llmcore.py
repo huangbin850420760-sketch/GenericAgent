@@ -371,11 +371,25 @@ def _stream_with_retry(sess, url, headers, payload, parse_fn):
         try: ra = float((resp.headers or {}).get("retry-after"))
         except: ra = None
         return max(0.5, ra if ra is not None else min(30.0, 1.5 * (2 ** attempt)))
+    import json as _json
     for attempt in range(sess.max_retries + 1):
         streamed = False
+        if attempt == 0:
+            _payload_size = len(_json.dumps(payload))
+            print(f"[DEBUG] >>> Request to: {url}")
+            print(f"[DEBUG]     model={payload.get('model')}, stream={payload.get('stream')}, payload_size={_payload_size}b ({_payload_size/1024:.1f}KB)")
+            print(f"[DEBUG]     timeout=(connect={sess.connect_timeout}s, read={sess.read_timeout}s), proxies={sess.proxies}, verify={sess.verify}")
+            print(f"[DEBUG]     headers: {list(headers.keys())}")
+            _msgs = payload.get('messages', [])
+            print(f"[DEBUG]     messages: {len(_msgs)} items, roles: {[m.get('role','?') for m in _msgs[:5]]}")
+            if payload.get('system'): print(f"[DEBUG]     system: {len(str(payload['system']))}b")
+            if payload.get('tools'): print(f"[DEBUG]     tools: {len(payload['tools'])} items")
         try:
+            t0 = time.time()
             with requests.post(url, headers=headers, json=payload, stream=sess.stream, 
                                timeout=(sess.connect_timeout, sess.read_timeout), proxies=sess.proxies, verify=sess.verify) as r:
+                elapsed = time.time() - t0
+                print(f"[DEBUG] <<< HTTP {r.status_code} in {elapsed:.2f}s, Content-Type={r.headers.get('content-type','?')}")
                 if r.status_code >= 400:
                     if r.status_code in _RETRYABLE and attempt < sess.max_retries:
                         d = _delay(r, attempt)
@@ -383,6 +397,7 @@ def _stream_with_retry(sess, url, headers, payload, parse_fn):
                         time.sleep(d); continue
                     try: body = r.text.strip()[:500]
                     except: body = ""
+                    print(f"[DEBUG] <<< Error body: {body}")
                     err = f"!!!Error: HTTP {r.status_code}" + (f": {body}" if body else "")
                     yield err; return [{"type": "text", "text": err}]
                 gen = parse_fn(r)
@@ -390,6 +405,16 @@ def _stream_with_retry(sess, url, headers, payload, parse_fn):
                     while True: streamed = True; yield next(gen)
                 except StopIteration as e: return e.value or []
         except (requests.Timeout, requests.ConnectionError) as e:
+            elapsed = time.time() - t0
+            print(f"[DEBUG] <<< {type(e).__name__} after {elapsed:.2f}s (attempt {attempt+1}/{sess.max_retries+1})")
+            print(f"[DEBUG] <<< Exception details: {repr(e)}")
+            # Print the root cause chain
+            _cause = e
+            _depth = 0
+            while _cause.__cause__ and _depth < 5:
+                _cause = _cause.__cause__
+                _depth += 1
+                print(f"[DEBUG] <<<   cause[{_depth}]: {type(_cause).__name__}: {_cause}")
             err = f"!!!Error: {type(e).__name__}"
             if attempt < sess.max_retries:
                 d = _delay(None, attempt)
@@ -644,6 +669,11 @@ class ClaudeSession(BaseSession):
         self._apply_claude_thinking(payload)
         if self.system: payload["system"] = [{"type": "text", "text": self.system, "cache_control": {"type": "persistent"}}]
         url = auto_make_url(self.api_base, "messages")
+        # [DEBUG] Log entry into ClaudeSession.raw_ask
+        import json as _dbg_json
+        _dbg_payload_size = len(_dbg_json.dumps(payload, ensure_ascii=False))
+        _dbg_msg_count = len(messages)
+        print(f"[DEBUG ClaudeSession.raw_ask] model={self.model} url={url} stream={self.stream} msgs={_dbg_msg_count} payload={_dbg_payload_size}b")
         parse_fn = (lambda r: _parse_claude_sse(r.iter_lines())) if self.stream else (lambda r: _parse_claude_json(r.json()))
         return (yield from _stream_with_retry(self, url, headers, payload, parse_fn))
     def make_messages(self, raw_list):

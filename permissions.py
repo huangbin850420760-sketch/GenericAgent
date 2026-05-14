@@ -1,26 +1,36 @@
 """Permission / safety gate for risky tool calls.
 
 The agent calls `request_approval(tool_name, args, preview)` BEFORE executing a
-risky tool. The IDE shows an approval card; the user can Approve, Reject, or
-toggle "Bypass mode" (auto-approve everything for this session).
+risky tool. Behaviour depends on the *frontend*:
 
-Risk levels
------------
-- ``safe``     : read-only, idempotent. Never gated. (file_read, web_scan, ...)
-- ``caution``  : mutates user files but already shows a diff (file_write,
-                  file_patch). Gated unless bypass is on.
-- ``danger``   : arbitrary code/shell execution (code_run). Always gated unless
-                  bypass is on.
+IDE mode (VS Code extension)
+----------------------------
+Sends a `tool_approval_request` over the WS bridge; the editor renders an
+inline card with Allow / Deny / Allow-session buttons. Backend blocks until
+the user decides.
 
-Bypass mode
------------
-Frontend can flip a per-session flag via the ``set_bypass`` WS message. Backend
-also reads a process-start env var ``GA_PERMISSION_BYPASS=1`` for headless / CI.
+Non-IDE mode (Feishu bot / CLI / autonomous webapp)
+---------------------------------------------------
+There is no real-time human in the loop, so the gate falls back to a static
+*policy* (env ``GA_PERMISSION_POLICY``, default ``deny_dangerous``):
 
-Fallbacks
----------
-If the IDE is not connected (CLI / web-only), permission gating is skipped — the
-agent runs as before. This preserves backward compatibility.
+- ``deny_dangerous`` (default): allow safe + caution, reject ``danger``
+  (e.g. ``code_run``). This prevents bot users from running arbitrary
+  shell on the host.
+- ``open``: legacy behaviour — allow everything (use only in trusted CLI /
+  CI environments).
+
+Bypass
+------
+Operators can flip a per-process bypass via ``set_bypass`` WS message
+(IDE) or ``GA_PERMISSION_BYPASS=1`` env. When bypass is on the gate
+unconditionally allows every call regardless of policy.
+
+Risk taxonomy
+-------------
+- ``safe``    : read-only / idempotent (file_read, web_scan, ...)
+- ``caution`` : file mutation w/ visible diff (file_write, file_patch)
+- ``danger``  : arbitrary code / shell (code_run)
 """
 from __future__ import annotations
 
@@ -34,6 +44,9 @@ import ide_bridge
 # Per-process bypass state. Mutated by webapp.py on `set_bypass` WS messages.
 _bypass_lock = threading.Lock()
 _bypass: bool = os.environ.get('GA_PERMISSION_BYPASS', '') == '1'
+
+# Static policy applied when no IDE is connected. See module docstring.
+_POLICY: str = (os.environ.get('GA_PERMISSION_POLICY') or 'deny_dangerous').lower()
 
 
 RISK_SAFE = 'safe'

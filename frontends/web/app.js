@@ -738,8 +738,14 @@
     $('sops-count').textContent = `${fSops.length}`;
     $('tools-grid').innerHTML = fTools.map(skillCardHTML).join('') ||
       `<div class="col-span-full text-frost-400 text-sm text-center py-4">无匹配工具</div>`;
-    $('sops-grid').innerHTML = fSops.map(skillCardHTML).join('') ||
-      `<div class="col-span-full text-frost-400 text-sm text-center py-4">无匹配SOP</div>`;
+    const localGrid = $('sops-grid');
+    if (localGrid) {
+      localGrid.innerHTML = fSops.map(skillCardHTML).join('') ||
+        `<div class="col-span-full text-frost-400 text-sm text-center py-4">无匹配SOP</div>`;
+    }
+    // Update SOP count badge
+    const countBadge = $('sop-tab-count');
+    if (countBadge) countBadge.textContent = `${fSops.length}`;
 
     // Category sidebar
     const cats = [
@@ -775,7 +781,10 @@
       <div class="skill-card-brief">${escapeHTML(s.brief || '(无描述)')}</div>
       <div class="skill-card-footer">
         <span class="skill-card-tag ${tagCls}">${tagText}</span>
-        <span class="cta flex items-center gap-1">查看详情 <span>→</span></span>
+        <div class="flex items-center gap-2">
+          ${s.category === 'sop' ? `<button class="upload-to-sophub-btn flex items-center gap-1 px-2 py-0.5 rounded-lg bg-accent-violet/10 hover:bg-accent-violet/25 text-accent-violet text-[11px] transition" data-sop-name="${escapeAttr(s.name)}" data-sop-title="${escapeAttr(s.title || s.name)}" title="上传到社区"><i data-lucide="upload-cloud" class="w-3 h-3"></i>上传</button>` : ''}
+          <span class="cta flex items-center gap-1">查看详情 <span>→</span></span>
+        </div>
       </div>
     </div>`;
   }
@@ -836,6 +845,253 @@
   });
 
   $('skill-search').addEventListener('input', (e) => renderSkills(e.target.value));
+
+  /* ═════ SOP tabs: Local + Community ═════ */
+  const sophubState = { page: 1, totalPages: 1, lastQ: '', localSopNames: [] };
+
+  async function loadLocalSopNames() {
+    try {
+      const data = await API.listSkills();
+      const list = Array.isArray(data) ? data : (data.sops || []);
+      // Store both name and title for fuzzy matching
+      sophubState.localSopNames = list.map(s => ({
+        name: (s.name || '').toLowerCase().replace(/\.md$|\.py$/, ''),
+        title: (s.title || '').toLowerCase()
+      })).filter(s => s.name || s.title);
+    } catch (e) { /* ignore */ }
+  }
+
+  function switchSopTab(tab) {
+    const localBtn = $('sop-tab-local');
+    const commBtn = $('sop-tab-community');
+    const localPanel = $('sop-local-panel');
+    const commPanel = $('sop-community-panel');
+    if (tab === 'local') {
+      localBtn.classList.add('active');
+      commBtn.classList.remove('active');
+      localPanel.classList.remove('hidden');
+      commPanel.classList.add('hidden');
+    } else {
+      localBtn.classList.remove('active');
+      commBtn.classList.add('active');
+      localPanel.classList.add('hidden');
+      commPanel.classList.remove('hidden');
+      // Auto-search community on first tab open
+      if (!sophubState.lastQ) sophubSearch('', 1);
+    }
+  }
+
+  // ── Community SOP card renderer (reused) ──────────────────────────
+  function renderSophubCard(item) {
+    const sopId = item.sop_id || item.id || '';
+    const stars = item.stars || 0;
+    const downloads = item.downloads || 0;
+    const author = item.agent_name || item.author || '匿名';
+    const isLocal = sophubState.localSopNames && sophubState.localSopNames.length > 0 && sophubState.localSopNames.some(n => {
+      const t = (item.title || '').toLowerCase();
+      return t.includes(n.title) || n.title.includes(t) ||
+        t.replace(/[_\s-]/g, '').includes(n.name.replace(/[_\s-]/g, '')) ||
+        n.name.replace(/[_\s-]/g, '').includes(t.replace(/[_\s-]/g, ''));
+    });
+    const localBadge = isLocal ? '<span class="px-1.5 py-0.5 rounded bg-green-500/20 text-green-400 text-[10px] ml-1">本地已有</span>' : '';
+    const dlBtn = isLocal
+      ? '<button disabled class="px-2 py-1 rounded-md bg-ink-700 text-frost-500 text-xs cursor-not-allowed"><i data-lucide="check" class="w-3 h-3 inline"></i> 已有</button>'
+      : `<button class="px-2 py-1 rounded-md bg-accent-violet/20 hover:bg-accent-violet/40 text-accent-violet text-xs transition" onclick="event.stopPropagation(); downloadSophub('${sopId}', '${escapeAttr(item.title || '')}')"><i data-lucide="download" class="w-3 h-3 inline"></i> 下载</button>`;
+    return `<div class="p-4 rounded-xl bg-ink-800/60 border border-white/8 hover:border-accent-violet/40 cursor-pointer transition group" onclick="openSophubDetail('${sopId}')">
+      <div class="flex items-start justify-between mb-2">
+        <span class="text-xl">${item.file_type === 'python' ? '🐍' : '📘'}</span>
+        <span class="text-xs text-frost-400 flex items-center gap-1"><i data-lucide="star" class="w-3 h-3 text-accent-amber"></i>${stars} <i data-lucide="download" class="w-3 h-3 ml-1"></i>${downloads}</span>
+      </div>
+      <h4 class="text-frost-50 font-medium text-sm mb-1 truncate">${escapeHTML(item.title || item.name)}${localBadge}</h4>
+      <p class="text-frost-400 text-xs mb-2 line-clamp-2">${escapeHTML(item.brief || item.description || '(无描述)')}</p>
+      <div class="flex items-center justify-between">
+        <span class="text-xs text-frost-500">by ${escapeHTML(author)}</span>
+        ${dlBtn}
+      </div>
+    </div>`;
+  }
+
+  function renderSophubResults(data) {
+    const el = $('sophub-results');
+    if (!data || !data.items || data.items.length === 0) {
+      el.innerHTML = '<div class="col-span-full text-frost-400 text-sm text-center py-8">没有找到匹配的 SOP</div>';
+      return;
+    }
+    el.innerHTML = data.items.map(renderSophubCard).join('');
+    lucide.createIcons();
+    sophubState.totalPages = data.total_pages || 1;
+    renderSophubPagination(data.current_page || 1);
+  }
+
+  function renderSophubPagination(current) {
+    const pg = $('sophub-pagination');
+    const total = sophubState.totalPages;
+    if (total <= 1) { pg.innerHTML = ''; return; }
+    const btns = [];
+    if (current > 1) btns.push(`<button onclick="sophubGo(${current - 1})" class="px-3 py-1.5 rounded-lg bg-ink-700 hover:bg-ink-600 text-frost-100 text-sm transition">‹ 上一页</button>`);
+    btns.push(`<span class="px-3 py-1.5 text-frost-400 text-sm">第 ${current} / ${total} 页</span>`);
+    if (current < total) btns.push(`<button onclick="sophubGo(${current + 1})" class="px-3 py-1.5 rounded-lg bg-ink-700 hover:bg-ink-600 text-frost-100 text-sm transition">下一页 ›</button>`);
+    pg.innerHTML = btns.join('');
+  }
+
+  async function sophubSearch(q, page = 1) {
+    const tip = $('sophub-tip');
+    try {
+      if (tip) tip.textContent = '正在搜索...';
+      await loadLocalSopNames();
+      const data = await API.sophubSearch(q, page, 24);
+      if (tip) tip.textContent = `共 ${data.total || 0} 个结果`;
+      renderSophubResults(data);
+    } catch (e) {
+      if (tip) tip.textContent = '⚠️ ' + (e.message || '搜索失败，请检查 API Key 配置');
+      $('sophub-results').innerHTML = '';
+    }
+  }
+
+  function sophubGo(page) { sophubSearch(sophubState.lastQ, page); }
+
+  async function openSophubDetail(id) {
+    try {
+      const data = await API.sophubSop(id);
+      modalIcon.textContent = data.icon || '📘';
+      modalTitle.textContent = data.title || id;
+      modalSubtitle.textContent = `社区 SOP · by ${data.agent_name || '匿名'}`;
+      const schema = data.parameters ? `<h3>参数 Schema</h3><pre><code>${escapeHTML(JSON.stringify(data.parameters, null, 2))}</code></pre>` : '';
+      const tags = (data.tags || []).length ? `<div class="flex flex-wrap gap-1 mb-4">${data.tags.map(t => `<span class="px-2 py-0.5 rounded-full bg-accent-violet/15 text-accent-violet text-xs">${escapeHTML(t)}</span>`).join('')}</div>` : '';
+      modalBody.innerHTML = `
+        ${tags}
+        <h3>描述</h3><p>${escapeHTML(data.brief || data.description || '(无)')}</p>
+        ${schema}
+        <h3>内容</h3><pre><code class="language-markdown">${escapeHTML(data.content || '')}</code></pre>`;
+      modalBody.querySelectorAll('pre code').forEach(b => { if (window.hljs) hljs.highlightElement(b); });
+      modalOverlay.dataset.skillUse = JSON.stringify({ category: 'sophub', name: data.title });
+      openModal();
+    } catch (e) {
+      showToast('加载 SOP 详情失败: ' + e.message);
+    }
+  }
+
+  async function downloadSophub(id, name) {
+    try {
+      showToast('正在下载...');
+      const blob = await API.sophubDownload(id);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = name + '.md';
+      a.click();
+      URL.revokeObjectURL(url);
+      showToast('下载完成', 'success');
+    } catch (e) {
+      showToast('下载失败: ' + e.message);
+    }
+  }
+
+  // ── Upload local SOP to community ──────────────────────────────
+  async function uploadLocalSop(sopName, sopTitle) {
+    try {
+      const data = await API.listSkills();
+      const sop = data.sops.find(s => s.name === sopName);
+      if (!sop) { showToast('未找到本地 SOP: ' + sopName); return; }
+      const html = `<div class="space-y-4">
+        <div>
+          <label class="block text-frost-200 text-sm mb-1.5">SOP 标题</label>
+          <input id="su-title" type="text" value="${escapeAttr(sopTitle)}" class="w-full px-4 py-2.5 bg-ink-900 border border-white/10 rounded-xl text-sm text-frost-50 outline-none focus:border-accent-violet transition" />
+        </div>
+        <div>
+          <label class="block text-frost-200 text-sm mb-1.5">类型</label>
+          <select id="su-type" class="w-full px-4 py-2.5 bg-ink-900 border border-white/10 rounded-xl text-sm text-frost-50 outline-none focus:border-accent-violet transition">
+            <option value="markdown">Markdown (.md)</option>
+            <option value="python">Python (.py)</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-frost-200 text-sm mb-1.5">SOP 内容</label>
+          <textarea id="su-content" rows="14" placeholder="粘贴 SOP 内容..." class="w-full px-4 py-2.5 bg-ink-900 border border-white/10 rounded-xl text-sm text-frost-50 outline-none focus:border-accent-violet transition font-mono resize-y"></textarea>
+        </div>
+        <button id="su-submit" class="w-full py-2.5 rounded-xl bg-accent-violet hover:bg-accent-violet/80 text-white text-sm font-medium transition"><i data-lucide="upload-cloud" class="w-4 h-4 inline mr-1"></i>上传到社区</button>
+      </div>`;
+      modalIcon.textContent = '📤';
+      modalTitle.textContent = '上传 SOP 到社区';
+      modalSubtitle.textContent = '上传后其他人可以搜索和使用';
+      modalBody.innerHTML = html;
+      modalBody.querySelectorAll('#su-submit').forEach(b => {
+        b.addEventListener('click', async () => {
+          const title = $('su-title').value.trim();
+          const content = $('su-content').value.trim();
+          const ft = $('su-type').value;
+          if (!title || !content) { showToast('请填写标题和内容'); return; }
+          b.disabled = true; b.textContent = '上传中...';
+          try {
+            const r = await API.sophubUpload(title, content, ft);
+            showToast('上传成功！SOP ID: ' + r.sop_id, 'success');
+            closeModal();
+          } catch (e) { showToast('上传失败: ' + e.message); b.disabled = false; b.innerHTML = '<i data-lucide="upload-cloud" class="w-4 h-4 inline mr-1"></i>上传到社区'; lucide.createIcons(); }
+        });
+      });
+      openModal();
+    } catch (e) {
+      showToast('读取本地 SOP 失败: ' + e.message);
+    }
+  }
+
+  // ── Community SOP upload modal (blank) ───────────────────────────
+  async function openSophubUpload() {
+    const html = `<div class="space-y-4">
+      <div>
+        <label class="block text-frost-200 text-sm mb-1.5">SOP 标题</label>
+        <input id="su-title" type="text" placeholder="给 SOP 起个名字..." class="w-full px-4 py-2.5 bg-ink-900 border border-white/10 rounded-xl text-sm text-frost-50 outline-none focus:border-accent-violet transition" />
+      </div>
+      <div>
+        <label class="block text-frost-200 text-sm mb-1.5">类型</label>
+        <select id="su-type" class="w-full px-4 py-2.5 bg-ink-900 border border-white/10 rounded-xl text-sm text-frost-50 outline-none focus:border-accent-violet transition">
+          <option value="markdown">Markdown (.md)</option>
+          <option value="python">Python (.py)</option>
+        </select>
+      </div>
+      <div>
+        <label class="block text-frost-200 text-sm mb-1.5">SOP 内容</label>
+        <textarea id="su-content" rows="14" placeholder="粘贴 SOP 内容..." class="w-full px-4 py-2.5 bg-ink-900 border border-white/10 rounded-xl text-sm text-frost-50 outline-none focus:border-accent-violet transition font-mono resize-y"></textarea>
+      </div>
+      <button id="su-submit" class="w-full py-2.5 rounded-xl bg-accent-violet hover:bg-accent-violet/80 text-white text-sm font-medium transition"><i data-lucide="upload-cloud" class="w-4 h-4 inline mr-1"></i>上传到社区</button>
+    </div>`;
+    modalIcon.textContent = '📤';
+    modalTitle.textContent = '上传 SOP 到社区';
+    modalSubtitle.textContent = '上传后其他人可以搜索和使用';
+    modalBody.innerHTML = html;
+    modalBody.querySelectorAll('#su-submit').forEach(b => {
+      b.addEventListener('click', async () => {
+        const title = $('su-title').value.trim();
+        const content = $('su-content').value.trim();
+        const ft = $('su-type').value;
+        if (!title || !content) { showToast('请填写标题和内容'); return; }
+        b.disabled = true; b.textContent = '上传中...';
+        try {
+          const r = await API.sophubUpload(title, content, ft);
+          showToast('上传成功！SOP ID: ' + r.sop_id, 'success');
+          closeModal();
+        } catch (e) { showToast('上传失败: ' + e.message); b.disabled = false; b.innerHTML = '<i data-lucide="upload-cloud" class="w-4 h-4 inline mr-1"></i>上传到社区'; lucide.createIcons(); }
+      });
+    });
+    openModal();
+  }
+
+  // ── Event listeners ─────────────────────────────────────────────
+  $('sop-tab-local')?.addEventListener('click', () => switchSopTab('local'));
+  $('sop-tab-community')?.addEventListener('click', () => switchSopTab('community'));
+  $('sophub-search-btn')?.addEventListener('click', () => {
+    sophubState.lastQ = $('sophub-search-input')?.value.trim() || '';
+    sophubState.page = 1;
+    sophubSearch(sophubState.lastQ, 1);
+  });
+  $('sophub-search-input')?.addEventListener('keydown', e => { if (e.key === 'Enter') $('sophub-search-btn')?.click(); });
+  $('btn-upload-sop')?.addEventListener('click', openSophubUpload);
+
+  // Delegate: upload local SOP to community (dynamic button in skill cards)
+  document.addEventListener('click', e => {
+    const btn = e.target.closest('.upload-to-sophub-btn');
+    if (btn) { e.stopPropagation(); uploadLocalSop(btn.dataset.sopName, btn.dataset.sopTitle); }
+  });
 
   /* ═════ Helpers ═════ */
   function escapeHTML(s) {
@@ -1138,4 +1394,10 @@
   inputEl.focus();
   // Fetch sessions immediately via HTTP (doesn't depend on WS connecting)
   refreshSessions();
+
+  // ── Expose sophub functions to global scope for onclick ──
+  window.openSophubDetail = openSophubDetail;
+  window.downloadSophub = downloadSophub;
+  window.sophubGo = sophubGo;
+  window.sophubSearch = sophubSearch;
 })();

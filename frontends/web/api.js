@@ -109,6 +109,19 @@
   }
   function ready() { return ws && ws.readyState === 1; }
 
+  // Sophub (community SOP hub)
+  async function sophubSearch(q, page = 1, pageSize = 24) { return _getJSON(`/api/sophub/search?q=${encodeURIComponent(q)}&page=${page}&page_size=${pageSize}`); }
+  async function sophubSop(id) { return _getJSON(`/api/sophub/sop/${id}`); }
+  async function sophubDownload(id) {
+    const r = await fetch(`/api/sophub/download/${id}`);
+    if (!r.ok) throw new Error((await r.json()).error || 'download failed');
+    return r.blob();
+  }
+  async function sophubUpload(title, content, fileType = 'markdown') {
+    return _postJSON('/api/sophub/upload', { title, content, file_type: fileType });
+  }
+  async function sophubMe() { return _getJSON('/api/sophub/me'); }
+
   window.GA_API = {
     getConfig, getStatus,
     listSessions, getSessionHistory, restoreSession, renameSession, deleteSession,
@@ -116,5 +129,6 @@
     uploadFile,
     getLLMConfig, saveLLMConfig, reloadLLMConfig, backupMykeyPy, listModels,
     connect, send, ready,
+    sophubSearch, sophubSop, sophubDownload, sophubUpload, sophubMe,
   };
 })();

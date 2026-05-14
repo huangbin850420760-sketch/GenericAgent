@@ -206,7 +206,7 @@ class GenericAgent:
     def run(self):
         while True:
             task = self.task_queue.get()
-            raw_query, source, display_queue = task["query"], task["source"], task["output"]
+            raw_query, source, images, display_queue = task["query"], task["source"], task.get("images") or [], task["output"]
             raw_query = self._handle_slash_cmd(raw_query, display_queue)
             if raw_query is None:
                 self.task_queue.task_done(); continue

@@ -28,8 +28,9 @@ from continue_cmd import (handle_frontend_command, install as _install_continue,
                           reset_conversation, list_sessions, restore as restore_session,
                           _pairs as _cc_pairs, _parse_native_history)
 import subprocess, glob, ast
-from urllib.request import urlopen
-from urllib.parse import quote
+from urllib.request import urlopen, Request
+from urllib.parse import quote, urlencode
+import urllib.error
 
 WEB_DIR = os.path.join(HERE, 'web')
 
@@ -722,6 +723,143 @@ def _api_sop():
     if content is None:
         return _json({'error': 'sop not found'}, 404)
     return _json({'name': name, 'content': content})
+
+
+# ───────── Sophub (community SOP hub) ─────────
+_SOPHUB_BASE = 'https://fudankw.cn/sophub'
+
+def _sophub_headers():
+    try:
+        from keychain import keys
+        return {'Authorization': f'Bearer {keys.sophub_api_key.use()}'}
+    except Exception:
+        return {}
+
+def _sophub_req(method, path, body=None, as_json=True, timeout=15):
+    import ssl
+    url = f'{_SOPHUB_BASE}{path}'
+    headers = {'Content-Type': 'application/json', **_sophub_headers()}
+    try:
+        if body and as_json:
+            data = json.dumps(body, ensure_ascii=False).encode()
+        elif body:
+            data = body
+        else:
+            data = None
+        req = Request(url, data=data, headers=headers, method=method)
+        ctx = ssl.create_default_context()
+        with urlopen(req, timeout=timeout, context=ctx) as r:
+            raw = r.read()
+            if as_json:
+                return json.loads(raw.decode())
+            return raw
+    except urllib.error.HTTPError as e:
+        try:
+            err_body = e.read().decode(errors='replace') if e.fp else ''
+            err = json.loads(err_body) if err_body.strip().startswith('{') else {}
+        except Exception:
+            err = {'raw': err_body[:200]}
+        return {'error': err.get('message', f'HTTP {e.code}'), '_status': e.code}
+    except Exception as e:
+        return {'error': f'{type(e).__name__}: {e}'}
+
+
+def _sophub_clean_md(text, maxlen=200):
+    """Strip markdown syntax from preview text."""
+    import re
+    # Remove image syntax ![alt](url)
+    text = re.sub(r'!\[.*?\]\(.*?\)', '', text)
+    # Remove link syntax [text](url), keep text
+    text = re.sub(r'\[([^\]]*)\]\(.*?\)', r'\1', text)
+    # Remove headings # and blockquotes >
+    text = re.sub(r'^#{1,6}\s*', '', text, flags=re.MULTILINE)
+    text = re.sub(r'^>\s*', '', text, flags=re.MULTILINE)
+    # Remove bold/italic markers
+    text = re.sub(r'\*{1,3}([^*]+)\*{1,3}', r'\1', text)
+    text = re.sub(r'_{1,3}([^_]+)_{1,3}', r'\1', text)
+    # Remove code blocks
+    text = re.sub(r'```[\s\S]*?```', '', text)
+    text = re.sub(r'`([^`]+)`', r'\1', text)
+    # Collapse whitespace
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text[:maxlen]
+
+def _sophub_map_item(item):
+    """Map upstream sophub API fields to frontend-expected fields."""
+    stats = item.get('stats') or {}
+    raw_preview = item.get('preview', '') or ''
+    clean_brief = _sophub_clean_md(raw_preview, 200)
+    return {
+        **item,
+        'sop_id': item.get('id', ''),
+        'brief': clean_brief,
+        'description': clean_brief,
+        'stars': stats.get('stars_avg', 0),
+        'downloads': stats.get('downloads', 0),
+        'views': stats.get('views', 0),
+        'author': item.get('author_name_snapshot', '匿名'),
+        'agent_name': item.get('author_name_snapshot', '匿名'),
+        'file_type': item.get('file_type', 'markdown'),
+    }
+
+
+@app.route('/api/sophub/search')
+def _sophub_search():
+    q = request.query.get('q', '')
+    page = int(request.query.get('page', 1))
+    ps = int(request.query.get('page_size', 24))
+    params = urlencode({'q': q, 'page': page, 'page_size': ps})
+    result = _sophub_req('GET', f'/api/sops?{params}')
+    if isinstance(result, dict) and 'error' in result:
+        return _json(result, result.get('_status', 502))
+    # Map items and add current_page for frontend pagination
+    items = result.get('items', [])
+    result['items'] = [_sophub_map_item(it) for it in items]
+    result['current_page'] = result.get('page', page)
+    return _json(result)
+
+
+@app.route('/api/sophub/sop/<sop_id>')
+def _sophub_sop(sop_id):
+    result = _sophub_req('GET', f'/api/sops/{sop_id}')
+    if isinstance(result, dict) and 'error' in result:
+        return _json(result, result.get('_status', 502))
+    return _json(_sophub_map_item(result))
+
+
+@app.route('/api/sophub/download/<sop_id>')
+def _sophub_download(sop_id):
+    result = _sophub_req('GET', f'/api/sops/{sop_id}/download', as_json=False)
+    if isinstance(result, dict) and 'error' in result:
+        return _json(result, result.get('_status', 502))
+    return HTTPResponse(result, Status='200 OK',
+                         HeaderDict={'Content-Type': 'application/octet-stream',
+                                     'Content-Disposition': f'attachment; filename=sop_{sop_id}.md'})
+
+
+@app.route('/api/sophub/upload', method='POST')
+def _sophub_upload():
+    try:
+        body = json.loads(request.body.read())
+    except Exception:
+        return _json({'error': 'invalid JSON body'}, 400)
+    title = body.get('title', '')
+    content = body.get('content', '')
+    file_type = body.get('file_type', 'markdown')
+    if not title or not content:
+        return _json({'error': 'title and content required'}, 400)
+    result = _sophub_req('POST', '/api/sops', body={'title': title, 'content': content, 'file_type': file_type})
+    if isinstance(result, dict) and 'error' in result:
+        return _json(result, result.get('_status', 502))
+    return _json(result)
+
+
+@app.route('/api/sophub/me')
+def _sophub_me():
+    result = _sophub_req('GET', '/api/me')
+    if isinstance(result, dict) and 'error' in result:
+        return _json(result, result.get('_status', 401))
+    return _json(result)
 
 
 @app.route('/api/ide-selftest', method='POST')

@@ -1,7 +1,7 @@
 {
   "version": "1.0.0",
-  "lastScanned": 1777444741850,
-  "projectRoot": "e:\\huangbin850420760\\GenericAgent",
+  "lastScanned": 1778293349525,
+  "projectRoot": "E:\\huangbin850420760\\GenericAgent",
   "techStack": {
     "languages": [
       {
@@ -47,7 +47,7 @@
       "path": "assets",
       "purpose": "Static assets",
       "fileCount": 14,
-      "lastAccessed": 1777444741799,
+      "lastAccessed": 1778293349470,
       "keyFiles": [
         "code_run_header.py",
         "GenericAgent_Technical_Report.pdf",
@@ -60,7 +60,7 @@
       "path": "frontends",
       "purpose": null,
       "fileCount": 17,
-      "lastAccessed": 1777444741800,
+      "lastAccessed": 1778293349482,
       "keyFiles": [
         "chatapp_common.py",
         "chat_bubble.png",
@@ -72,21 +72,21 @@
     "memory": {
       "path": "memory",
       "purpose": null,
-      "fileCount": 25,
-      "lastAccessed": 1777444741800,
+      "fileCount": 29,
+      "lastAccessed": 1778293349483,
       "keyFiles": [
+        "0001-fix-llmcore-BigModel-SSE-1213-prompt.patch",
         "adb_ui.py",
         "autonomous_operation_sop.md",
-        "cua_reference.md",
-        "file_access_stats.json",
-        "github_contribution_sop.md"
+        "codebase_indexer.py",
+        "codebase_index_sop.md"
       ]
     },
     "plugins": {
       "path": "plugins",
       "purpose": null,
       "fileCount": 1,
-      "lastAccessed": 1777444741801,
+      "lastAccessed": 1778293349484,
       "keyFiles": [
         "langfuse_tracing.py"
       ]
@@ -95,7 +95,7 @@
       "path": "reflect",
       "purpose": null,
       "fileCount": 2,
-      "lastAccessed": 1777444741802,
+      "lastAccessed": 1778293349484,
       "keyFiles": [
         "autonomous.py",
         "scheduler.py"
@@ -105,7 +105,7 @@
       "path": "sche_tasks",
       "purpose": null,
       "fileCount": 3,
-      "lastAccessed": 1777444741802,
+      "lastAccessed": 1778293349485,
       "keyFiles": [
         "scheduler.log",
         "scheduler_run.log",
@@ -115,8 +115,8 @@
     "temp": {
       "path": "temp",
       "purpose": null,
-      "fileCount": 39,
-      "lastAccessed": 1777444741803,
+      "fileCount": 43,
+      "lastAccessed": 1778293349486,
       "keyFiles": [
         "after_confirm.png",
         "app.7c556ecc.js",
@@ -128,8 +128,8 @@
     "__pycache__": {
       "path": "__pycache__",
       "purpose": null,
-      "fileCount": 16,
-      "lastAccessed": 1777444741803,
+      "fileCount": 18,
+      "lastAccessed": 1778293349486,
       "keyFiles": [
         "agentmain.cpython-310.pyc",
         "agentmain.cpython-311.pyc",
@@ -139,6 +139,25 @@
       ]
     }
   },
-  "hotPaths": [],
+  "hotPaths": [
+    {
+      "path": "agentmain.py",
+      "accessCount": 10,
+      "lastAccessed": 1778307540184,
+      "type": "file"
+    },
+    {
+      "path": "ga.py",
+      "accessCount": 5,
+      "lastAccessed": 1778305713725,
+      "type": "file"
+    },
+    {
+      "path": "memory\\autonomous_operation_sop.md",
+      "accessCount": 3,
+      "lastAccessed": 1778305727425,
+      "type": "file"
+    }
+  ],
   "userDirectives": []
 }

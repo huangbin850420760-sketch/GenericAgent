@@ -60,6 +60,17 @@
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
 
   <link rel="stylesheet" href="/static/app.css">
+  <style>
+    /* SOP tab active/inactive states */
+    .sop-tab-btn { padding: 6px 14px; border-radius: 10px; font-size: 13px; font-weight: 500; color: #a0a4b8; background: transparent; border: none; cursor: pointer; transition: all 0.15s; }
+    .sop-tab-btn.active { background: rgba(139, 92, 246, 0.2); color: #a78bfa; }
+    .sop-tab-btn:hover:not(.active) { background: rgba(255,255,255,0.06); color: #e2e4f0; }
+    /* Upload to sophub button in skill cards */
+    .upload-to-sophub-btn { font-family: inherit; cursor: pointer; border: none; }
+    .upload-to-sophub-btn:hover { background: rgba(139, 92, 246, 0.3) !important; }
+    /* Sophub card hover */
+    .sophub-card:hover { border-color: rgba(139, 92, 246, 0.5); transform: translateY(-1px); }
+  </style>
 </head>
 <body class="h-screen overflow-hidden text-frost-100 font-sans text-[13px] antialiased app-bg">
   <div id="app" class="flex h-full overflow-hidden">
@@ -428,14 +439,39 @@
             <div id="tools-grid" class="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3"></div>
           </section>
 
-          <!-- SOPs section -->
-          <section class="mt-12 mb-8">
-            <h3 class="flex items-center gap-2.5 text-frost-50 font-semibold text-[17px] tracking-tight mb-4">
-              <span class="inline-flex w-7 h-7 rounded-lg bg-accent-green/15 items-center justify-center"><i data-lucide="book-open" class="w-4 h-4 text-accent-green"></i></span>
-              标准作业流程 (SOP)
-              <span id="sops-count" class="text-xs font-medium text-frost-400 bg-white/5 px-2 py-0.5 rounded-full">0</span>
-            </h3>
-            <div id="sops-grid" class="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3"></div>
+          <!-- ─── Unified SOP section: Local + Community ─── -->
+          <section class="mt-6 mb-8">
+            <!-- Tab bar -->
+            <div class="flex items-center justify-between mb-4">
+              <div class="flex items-center gap-1 p-1 bg-white/5 rounded-xl border border-white/8">
+                <button id="sop-tab-local" class="sop-tab-btn active flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition">
+                  <i data-lucide="book-open" class="w-4 h-4"></i>本地 SOP
+                  <span id="sops-count" class="text-xs font-medium text-frost-400 bg-white/5 px-2 py-0.5 rounded-full">0</span>
+                </button>
+                <button id="sop-tab-community" class="sop-tab-btn flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition">
+                  <i data-lucide="globe" class="w-4 h-4"></i>社区 SOP
+                </button>
+              </div>
+            </div>
+
+            <!-- Local SOP grid -->
+            <div id="sop-local-panel">
+              <div id="sops-grid" class="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3"></div>
+            </div>
+
+            <!-- Community SOP panel -->
+            <div id="sop-community-panel" class="hidden">
+              <div class="flex items-center gap-3 mb-5">
+                <div class="relative flex-1">
+                  <i data-lucide="search" class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-frost-400"></i>
+                  <input id="sophub-search-input" type="text" placeholder="搜索社区 SOP..." class="w-full pl-10 pr-4 py-2.5 bg-ink-900/70 backdrop-blur border border-white/10 rounded-xl text-sm text-frost-50 placeholder:text-frost-400 outline-none focus:border-accent-violet transition">
+                </div>
+                <button id="sophub-search-btn" class="px-5 py-2.5 rounded-xl bg-accent-violet hover:bg-accent-violet/80 text-white text-sm font-medium transition">搜索</button>
+              </div>
+              <div id="sophub-results" class="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3"></div>
+              <div id="sophub-pagination" class="flex items-center justify-center gap-2 mt-6"></div>
+              <p id="sophub-tip" class="text-center text-frost-400 text-xs mt-3">🔑 请在「设置 → 密钥」中添加 sophub_api_key 以连接社区</p>
+            </div>
           </section>
         </div>
       </main>
@@ -605,7 +641,7 @@
     </div>
   </div>
 
-  <script src="/static/api.js"></script>
-  <script src="/static/app.js"></script>
+  <script src="/static/api.js?v=2"></script>
+  <script src="/static/app.js?v=3"></script>
 </body>
 </html>
