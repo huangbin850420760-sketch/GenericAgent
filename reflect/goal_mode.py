@@ -7,10 +7,11 @@ INTERVAL = 3   # check间隔短，agent跑完立刻再检查
 ONCE = False
 
 _dir = os.path.dirname(os.path.abspath(__file__))
-STATE_FILE = os.environ.get('GOAL_STATE') or os.path.join(_dir, '../temp/goal_state.json')
-if not os.path.isabs(STATE_FILE):
-    STATE_FILE = os.path.join(_dir, '..', STATE_FILE)
-
+STATE_FILE = ''
+def init(a):
+    global STATE_FILE
+    STATE_FILE = a.get('goal_state') or os.environ.get('GOAL_STATE') or os.path.join(_dir, '../temp/goal_state.json')
+    if not os.path.isabs(STATE_FILE): STATE_FILE = os.path.join(_dir, '..', STATE_FILE)
 # --- state 管理 ---
 def _load():
     if not os.path.isfile(STATE_FILE): return None
@@ -35,6 +36,7 @@ CONTINUATION_PROMPT = """[Goal Mode — 持续推进]
 2. 在 cwd 下建立工作文件夹存放成果和进度，复杂任务可使用 plan 模式。
 3. 如果当前方向做完了，主动找下一个改进点：测试/边界case/性能/安全/文档/代码质量。
 4. 找不到改进点？扩大视野：关联模块、上下游依赖、用户体验、错误提示、日志可观测性、上网搜索、找其他路径、翻记忆里面有无相关。
+5. 要为了目标持续推进，在工作文件夹中记录进度，不要更新全局记忆。
 """
 
 BUDGET_LIMIT_PROMPT = """[Goal Mode — 预算耗尽，收口]
