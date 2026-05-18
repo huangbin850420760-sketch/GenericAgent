@@ -38,6 +38,7 @@ test_*.png
 tasks/
 
 *.zip
+*.exe
 
 memory/*
 !memory/memory_management_sop.md
@@ -80,6 +81,9 @@ memory/L4_raw_sessions/*
 # Goal Mode SOP
 !memory/goal_mode_sop.md
 
+# Goal Hive Mode SOP
+!memory/goal_hive_sop.md
+
 # Skill Search SOP
 !memory/skill_search/
 !memory/skill_search/**
@@ -107,6 +111,9 @@ memory/L4_raw_sessions/*
 .ga_index/
 # Code Review Principles
 !memory/code_review_principles.md
+
+# Review Mode SOP
+!memory/review_sop.md
 
 # Visual Studio
 .vs/
