@@ -131,3 +131,4 @@ reflect/*
 .claude/
 .omc/sessions/ 
 .omc/state/ 
+.gstack/

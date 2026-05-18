@@ -823,6 +823,7 @@
     lucide.createIcons();
   }
 
+  function openModal() { modalOverlay.classList.add('open'); lucide.createIcons(); }
   function closeModal() { modalOverlay.classList.remove('open'); }
   $('modal-close').addEventListener('click', closeModal);
   modalOverlay.addEventListener('click', (e) => { if (e.target === modalOverlay) closeModal(); });
