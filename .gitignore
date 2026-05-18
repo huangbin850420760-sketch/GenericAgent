@@ -139,3 +139,6 @@ reflect/*
 .omc/sessions/ 
 .omc/state/ 
 .gstack/
+
+# Privacy: local path info & large binary
+tools/cloudflared.exe
