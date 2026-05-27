@@ -2,29 +2,34 @@ import os, json, re, time, requests, sys, threading, urllib3, base64, importlib,
 from datetime import datetime
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 _RESP_CACHE_KEY = str(uuid.uuid4())
+_ROOT = os.path.dirname(os.path.abspath(__file__))
+if _ROOT not in sys.path: sys.path.append(_ROOT)
 
 def _load_mykeys():
     global _mykey_path
     try:
         import mykey; importlib.reload(mykey); _mykey_path = mykey.__file__
         return {k: v for k, v in vars(mykey).items() if not k.startswith('_')}
-    except ImportError: pass
-    _mykey_path = p = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'mykey.json')
-    if not os.path.exists(p): raise Exception('[ERROR] mykey.py or mykey.json not found, please create one from mykey_template.')
-    with open(p, encoding='utf-8') as f: return json.load(f)
+    except ImportError as e:
+        if getattr(e, 'name', None) != 'mykey':
+            raise Exception(f'[ERROR] mykey.py found but failed to import: {e}') from e
+    except SyntaxError as e:
+        raise Exception(f'[ERROR] mykey.py has syntax error: {e}') from e
+    p = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'mykey.json')
+    if not os.path.exists(p): raise Exception('[ERROR] mykey.py not found in sys.path and mykey.json not found. Run "python configure_mykey.py" or copy mykey_template.py to mykey.py and fill in your keys.')
+    with open(_mykey_path := p, encoding='utf-8') as f: return json.load(f)
 
 _mykey_path = _mykey_mtime = None
 def reload_mykeys():
     global _mykey_mtime
-    mt = os.stat(_mykey_path).st_mtime_ns if _mykey_path else -1
-    if mt == _mykey_mtime: return globals().get('mykeys', {}), False
-    mk = _load_mykeys(); _mykey_mtime = os.stat(_mykey_path).st_mtime_ns
-    print(f'[Info] Load mykeys from {_mykey_path}')
-    globals().update(mykeys=mk)
-    if mk.get('langfuse_config'):
-        try: from plugins import langfuse_tracing
-        except Exception: pass
-    return mk, True
+    try:
+        mt = os.stat(_mykey_path).st_mtime_ns if _mykey_path else -1
+        if mt == _mykey_mtime: return globals().get('mykeys', {}), False
+        mk = _load_mykeys(); _mykey_mtime = os.stat(_mykey_path).st_mtime_ns
+        print(f'[Info] Load mykeys from {_mykey_path}')
+        globals().update(mykeys=mk)
+        return mk, True
+    except: return globals().get('mykeys', {}), False
 
 def __getattr__(name):  # once guard in PEP 562
     if name == 'mykeys': return reload_mykeys()[0]
@@ -367,7 +372,7 @@ def _stamp_oai_cache_markers(messages, model):
             messages[idx] = {**messages[idx], 'content': c}
 
 def _stream_with_retry(sess, url, headers, payload, parse_fn):
-    _RETRYABLE = {408, 409, 425, 429, 500, 502, 503, 504, 529}
+    _RETRYABLE = {408, 409, 425, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524, 525, 526, 527, 529}
     def _delay(resp, attempt):
         try: ra = float((resp.headers or {}).get("retry-after"))
         except: ra = None
@@ -711,14 +716,19 @@ def _fix_messages(messages):
     fixed = []
     for m in messages:
         if fixed and m['role'] == fixed[-1]['role']:
-            fixed[-1] = {**fixed[-1], 'content': _wrap(fixed[-1]['content']) + [{"type": "text", "text": "\n"}] + _wrap(m['content'])}; continue
+            fixed[-1] = {**fixed[-1], 'content': _wrap(fixed[-1].get('content', [])) + [{"type": "text", "text": "\n"}] + _wrap(m.get('content', []))}; continue
         if fixed and fixed[-1]['role'] == 'assistant' and m['role'] == 'user':
-            uses = [b.get('id') for b in fixed[-1].get('content', []) if isinstance(b, dict) and b.get('type') == 'tool_use' and b.get('id')]
-            has = {b.get('tool_use_id') for b in _wrap(m['content']) if isinstance(b, dict) and b.get('type') == 'tool_result'}
-            miss = [uid for uid in uses if uid not in has]
-            if miss: m = {**m, 'content': [{"type": "tool_result", "tool_use_id": uid, "content": "(error)"} for uid in miss] + _wrap(m['content'])}
-            orphan = has - set(uses)
-            if orphan: m = {**m, 'content': [{"type":"text","text":str(b.get('content',''))} if isinstance(b,dict) and b.get('type')=='tool_result' and b.get('tool_use_id') in orphan else b for b in _wrap(m['content'])]}
+            uses = [b.get('id') for b in _wrap(fixed[-1].get('content', [])) if isinstance(b, dict) and b.get('type') == 'tool_use' and b.get('id')]
+            if uses:
+                got, rest = {}, []
+                for b in _wrap(m.get('content', [])):
+                    if isinstance(b, dict) and b.get('type') == 'tool_result':
+                        tid = b.get('tool_use_id')
+                        if tid in uses and tid not in got: got[tid] = b
+                        else: rest.append({"type":"text","text":str(b.get('content',''))})
+                    else: rest.append(b)
+                m = {**m, 'content': [got.get(uid) or {"type": "tool_result", "tool_use_id": uid, "content": "(error)"} for uid in uses] + rest}
+            else: m = {**m, 'content': [{"type":"text","text":str(b.get('content',''))} if isinstance(b,dict) and b.get('type')=='tool_result' else b for b in _wrap(m.get('content', []))]}
         fixed.append(m)
     while fixed and fixed[0]['role'] != 'user': fixed.pop(0)
     # Strip trailing whitespace-only text blocks from each message's content. Such blocks
@@ -729,13 +739,16 @@ def _fix_messages(messages):
             new_c = list(c); _strip_trailing_whitespace_blocks(new_c)
             if not new_c: new_c = [{"type": "text", "text": "(empty)"}]  # keep at least one block
             if new_c is not c: m['content'] = new_c
+    if fixed and fixed[0]['role'] == 'user':
+        fixed[0] = {**fixed[0], 'content': [{"type":"text","text":str(b.get('content',''))} if isinstance(b,dict) and b.get('type')=='tool_result' else b for b in _wrap(fixed[0].get('content', []))]}
+
     return fixed
 
 class NativeClaudeSession(BaseSession):
     def __init__(self, cfg):
         super().__init__(cfg)
         self.fake_cc_system_prompt = cfg.get("fake_cc_system_prompt", False)
-        self.user_agent = cfg.get("user_agent", "claude-cli/2.1.113 (external, cli)")
+        self.user_agent = cfg.get("user_agent", "claude-cli/2.1.152 (external, cli)")
         self._session_id = str(uuid.uuid4())
         self._account_uuid = str(uuid.uuid4())
         self._device_id = uuid.uuid4().hex + uuid.uuid4().hex[:32]
@@ -744,18 +757,24 @@ class NativeClaudeSession(BaseSession):
         messages = _ensure_thinking_blocks(_drop_unsigned_thinking(_oai_imgs_to_claude(_fix_messages(messages))), self.model)
         if self.max_tokens is None: self.max_tokens = 8192
         model = self.model
-        beta_parts = ["claude-code-20250219", "interleaved-thinking-2025-05-14", "redact-thinking-2026-02-12", "prompt-caching-scope-2026-01-05"]
+        beta_parts = ["claude-code-20250219", "interleaved-thinking-2025-05-14", "redact-thinking-2026-02-12", "context-management-2025-06-27", "prompt-caching-scope-2026-01-05", "effort-2025-11-24"]
         if "[1m]" in model.lower():
             beta_parts.insert(1, "context-1m-2025-08-07"); model = model.replace("[1m]", "").replace("[1M]", "")
         headers = {"Content-Type": "application/json", "anthropic-version": "2023-06-01",
             "anthropic-beta": ",".join(beta_parts), "anthropic-dangerous-direct-browser-access": "true",
             "user-agent": self.user_agent, "x-app": "cli"}
+        headers.update({"Accept": "application/json", "X-Claude-Code-Session-Id": self._session_id, "X-Stainless-Arch": "x64", "X-Stainless-Lang": "js", "X-Stainless-OS": "Windows", "X-Stainless-Package-Version": "0.94.0", "X-Stainless-Retry-Count": "0", "X-Stainless-Runtime": "node", "X-Stainless-Runtime-Version": "v24.3.0", "X-Stainless-Timeout": "600"})
         if self.api_key.startswith("sk-ant-"): headers["x-api-key"] = self.api_key
         else: headers["authorization"] = f"Bearer {self.api_key}"
         payload = {"model": model, "messages": messages, "max_tokens": self.max_tokens, "stream": self.stream}
+        if self.fake_cc_system_prompt: payload["max_tokens"] = 64000
         if self.temperature != 1: payload["temperature"] = self.temperature
         self._apply_claude_thinking(payload)
-        payload["metadata"] = {"user_id": json.dumps({"device_id": self._device_id, "account_uuid": self._account_uuid, "session_id": self._session_id}, separators=(',', ':'))}
+        payload["context_management"] = {"edits": [{"type": "clear_thinking_20251015", "keep": "all"}]}; 
+        if self.fake_cc_system_prompt:
+            if 'thinking' not in payload: payload["thinking"] = {"type": "adaptive"}
+            if 'output_config' not in payload: payload["output_config"] = {"effort": "medium"}
+        payload["metadata"] = {"user_id": json.dumps({"device_id": self._device_id, "account_uuid": "", "session_id": self._session_id}, separators=(',', ':'))}
         if self.tools:
             claude_tools = openai_tools_to_claude(self.tools)
             tools = [dict(t) for t in claude_tools]; tools[-1]["cache_control"] = {"type": "ephemeral"}
@@ -763,7 +782,7 @@ class NativeClaudeSession(BaseSession):
         else: print("[ERROR] No tools provided for this session.")
         payload['system'] = [{"type": "text", "text": "You are Claude Code, Anthropic's official CLI for Claude.", "cache_control": {"type": "ephemeral"}}]
         if self.system:
-            if self.fake_cc_system_prompt: messages[0]["content"].insert(0, {"type": "text", "text": self.system})
+            if self.fake_cc_system_prompt: payload["system"].append({"type": "text", "text": self.system})
             else: payload["system"] = [{"type": "text", "text": self.system}]
         user_idxs = [i for i, m in enumerate(messages) if m['role'] == 'user']
         for idx in user_idxs[-2:]:
