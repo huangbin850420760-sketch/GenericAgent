@@ -3578,7 +3578,7 @@ class SB:
             def _do_restore(path: str) -> None:
                 msg, _ = continue_cmd.restore(ag, path)
                 self.commit([_DIM + '┄┄ ' + _t('msg.continue_loading', name=os.path.basename(path)) + ' ┄┄' + _RST])
-                for mm in continue_cmd.extract_ui_messages(path):
+                for mm in continue_cmd.extract_ui_messages(path, max_rounds=80):
                     c = (mm.get('content') or '').strip()
                     if not c:
                         continue

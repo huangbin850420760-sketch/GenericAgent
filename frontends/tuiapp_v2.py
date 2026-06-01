@@ -3763,7 +3763,7 @@ class GenericAgentTUI(App[None]):
             sess.plan_complete_since = None
             sess.plan_lost_since = None
             self._plan_mtime.pop(sess.agent_id, None)
-            for h in continue_extract(path):
+            for h in continue_extract(path, max_rounds=80):
                 sess.messages.append(ChatMessage(role=h["role"], content=h["content"]))
             # Baseline past restored history so the scanner ignores the prior
             # session's plan.md; only re-shows on a fresh enter_plan_mode.

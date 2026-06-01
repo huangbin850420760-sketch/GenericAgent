@@ -388,7 +388,17 @@ def restore(agent, path):
     if history is not None:
         agent.abort()
         _replace_backend_history(agent, history)
-        return f'✅ 已恢复 {len(pairs)} 轮完整对话（{name}）\n(已写入 backend.history，可直接继续)', True
+        # 恢复后立即裁剪，防止长会话恢复时爆上下文
+        backend = getattr(getattr(agent, 'llmclient', None), 'backend', None)
+        if backend is not None and hasattr(backend, 'history') and hasattr(backend, 'context_win'):
+            from llmcore import trim_messages_history
+            before = len(backend.history)
+            trim_messages_history(backend.history, backend.context_win)
+            after = len(backend.history)
+            trimmed_info = f'（裁剪 {before} → {after} 条）' if before != after else ''
+        else:
+            trimmed_info = ''
+        return f'✅ 已恢复 {len(pairs)} 轮完整对话（{name}）{trimmed_info}\n(已写入 backend.history，可直接继续)', True
     from chatapp_common import _restore_native_history, _restore_text_pairs
     summary = _restore_text_pairs(content) or _restore_native_history(content)
     if not summary: return f'❌ {name} 无法解析（非 native 且无摘要可提取）', False
@@ -514,7 +524,7 @@ def _format_response_segment(response_body, tool_results):
     return '\n\n'.join(p for p in ['\n\n'.join(texts), '\n'.join(tool_parts)] if p)
 
 
-def extract_ui_messages(path):
+def extract_ui_messages(path, max_rounds=0):
     """Parse a model_responses log into [{role, content}, ...] for UI replay.
 
     Each user-initiated round becomes one user bubble plus one assistant bubble.
@@ -522,12 +532,30 @@ def extract_ui_messages(path):
     separated by ``**LLM Running (Turn N) ...**`` markers. Tool calls and their
     results are rendered into the assistant content using the same string format
     that agent_loop yields live, so fold_turns can fold them identically.
+
+    max_rounds: if > 0, only parse the last N user-initiated rounds (prevents OOM
+    on very long sessions). The file is still read fully but only the tail pairs
+    are processed into UI messages.
     """
     try:
         with open(path, encoding='utf-8', errors='replace') as f: content = f.read()
     except Exception: return []
     pairs = _pairs(content)
     if not pairs: return []
+
+    # Trim to last N user-initiated rounds if max_rounds specified
+    if max_rounds > 0:
+        user_count = 0
+        cut = 0
+        for i in range(len(pairs) - 1, -1, -1):
+            if _user_text(pairs[i][0]):
+                user_count += 1
+                if user_count > max_rounds:
+                    cut = i + 1
+                    break
+        if cut > 0:
+            pairs = pairs[cut:]
+
     # tool_results live in the *next* Prompt's content; index look-ahead.
     next_tr = [{} for _ in pairs]
     for i in range(len(pairs) - 1):
