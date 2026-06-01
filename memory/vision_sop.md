@@ -9,9 +9,10 @@
 ## 快速用法
 
 ```python
-from memory import vision_api
-result = vision_api.vision_call(image, prompt="描述图片内容", backend="claude", timeout=120)
-# image: 文件路径/bytes/PIL.Image | backend: 'claude'(默认) | 'gpt'
+from vision_api import ask_vision
+result = ask_vision(image, prompt="描述图片内容", timeout=60, max_pixels=1_440_000)
+# image: 文件路径(str/Path) 或 PIL Image
+# backend: 'claude'(默认) | 'openai' | 'modelscope'
 # 返回 str：成功为模型回复，失败为 'Error: ...'
 ```
 

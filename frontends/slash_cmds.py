@@ -23,15 +23,102 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sys
 import subprocess
+import time
 from pathlib import Path
 from typing import Optional
+
+
+_USER_SHELL: tuple[list[str], str] | None = None
+
+
+def detect_user_shell() -> tuple[list[str], str]:
+    """Return `([executable, ...flags_for_-c], display_name)` for the user's
+    interactive shell.  Cached after first call.
+
+    `!cmd` in tui_v2 / tui_v3 invokes this so commands like `ls`, pipes,
+    globs, and shell builtins behave the way the user expects in whatever
+    shell launched the app, instead of hardcoding cmd.exe / /bin/sh.
+
+    Resolution order:
+      1. `$SHELL` if it points to an existing file (Unix, Git Bash, WSL)
+      2. Windows only: Git Bash at the canonical install paths
+      3. `bash` anywhere on PATH (WSL bash, Cygwin, MSYS2, etc.)
+      4. Windows only: `pwsh` then `powershell.exe` on PATH
+      5. Unix `/bin/sh` / Windows `%COMSPEC%` (cmd.exe) — last resort
+    """
+    global _USER_SHELL
+    if _USER_SHELL is not None:
+        return _USER_SHELL
+
+    s = os.environ.get("SHELL")
+    if s and os.path.exists(s):
+        name = os.path.basename(s)
+        if name.lower().endswith(".exe"):
+            name = name[:-4]
+        _USER_SHELL = ([s, "-c"], name)
+        return _USER_SHELL
+
+    if sys.platform == "win32":
+        for p in (
+            r"C:\Program Files\Git\bin\bash.exe",
+            r"C:\Program Files (x86)\Git\bin\bash.exe",
+        ):
+            if os.path.exists(p):
+                _USER_SHELL = ([p, "-c"], "bash")
+                return _USER_SHELL
+        bash = shutil.which("bash")
+        if bash:
+            _USER_SHELL = ([bash, "-c"], "bash")
+            return _USER_SHELL
+        for name in ("pwsh", "powershell"):
+            p = shutil.which(name)
+            if p:
+                # -NoProfile keeps each `!cmd` snappy + reproducible.
+                _USER_SHELL = ([p, "-NoProfile", "-Command"], name)
+                return _USER_SHELL
+        cmd = os.environ.get("COMSPEC", "cmd.exe")
+        _USER_SHELL = ([cmd, "/d", "/s", "/c"], "cmd")
+        return _USER_SHELL
+
+    _USER_SHELL = (["/bin/sh", "-c"], "sh")
+    return _USER_SHELL
+
 
 
 # Repo root = parent of frontends/.  Avoid hard-coding; both TUIs live next to
 # this file and share the same anchor.
 _ROOT = Path(__file__).resolve().parent.parent
+
+# Language resolution is owned here (not passed in as a formal arg) so every
+# prompt builder stays single-parameter and TUI call sites don't need to know
+# which prompt happens to be bilingual.  Source of truth, in order:
+#   1. `GA_LANG` env var (scriptable override; matches tui_v3 convention)
+#   2. tui_v3's persisted settings file (same path as tui_v3.py:_SETTINGS_PATH)
+#   3. system locale (zh* → 'zh', else 'en')
+# When the user switches language inside tui_v3 (set_lang persists), the next
+# call here picks it up automatically -- no formal coupling, just a shared file.
+_SETTINGS_PATH = _ROOT / "temp" / "tui_v3_settings.json"
+
+
+def _current_lang() -> str:
+    env = (os.environ.get("GA_LANG") or "").strip().lower()
+    if env in ("zh", "en"):
+        return env
+    try:
+        with open(_SETTINGS_PATH, "r", encoding="utf-8") as f:
+            saved = (json.load(f) or {}).get("lang")
+        if saved in ("zh", "en"):
+            return saved
+    except Exception:
+        pass
+    for var in ("LC_ALL", "LC_MESSAGES", "LANG"):
+        v = os.environ.get(var, "")
+        if v:
+            return "zh" if v.lower().startswith("zh") else "en"
+    return "en"
 
 
 # ----- prompt builders (pure functions, no I/O) ---------------------------
@@ -54,13 +141,52 @@ def _tail(args_text: str, label: str = "额外指示") -> str:
 
 
 def build_update_prompt(args_text: str = "") -> str:
-    # Faithfully follow the user's own wording (2026-05-27):
-    # "git pull 更新一下 GA 你自己，官方渠道 https://github.com/Lsdefine/GenericAgent,
-    #  自动合并解决冲突,优先上游分支,本地修改代码也进行保留但不进行 commit."
+    """Prompt-only /update orchestration; actual git work stays in-agent.
+
+    The TUI owns zero git/LLM logic.  This prompt asks the normal agent loop to
+    do a user-friendly preflight (upstream commits + diff) before pulling.
+    Language follows `_current_lang()` so a /language switch in tui_v3 (or a
+    `GA_LANG=...` shell override) automatically flips this prompt too.
+    """
+    if _current_lang() == "en":
+        return (
+            "Update this GenericAgent checkout from the official upstream "
+            "https://github.com/Lsdefine/GenericAgent .\n"
+            "1. Fetch upstream; identify the current branch and whether there are any local "
+            "commits ahead of upstream.\n"
+            "2. Show a concise preview: recent upstream commits not yet local "
+            "(short hash + subject + date) plus a changed-files summary.\n"
+            "3. Apply the update (uncommitted working-tree changes must always be preserved):\n"
+            "   - If local commits exist: merge upstream into the current branch, auto-resolving "
+            "conflicts in favor of upstream, and keep the local commits. A merge commit is acceptable here.\n"
+            "   - Otherwise: run `git reset --mixed upstream/main` so local `main` aligns exactly "
+            "with upstream/main, automatically resolving conflicts in favor of upstream. Keep the local changes but do not create any new commits.\n"
+            "4. Finish with a short summary: branch HEAD, changed files, conflicts/resolutions.\n"
+            "\n"
+            "#### Say 'Congratulations! 🎉' to the user\n"
+            "After a successful update, say: \"Congratulations! 🎉 You have successfully "
+            "updated GenericAgent!\"\n"
+            "\n"
+            "#### Ask for a Star ⭐\n"
+            "Then you may ask: \"If you found this helpful, would you like to star the "
+            "GenericAgent repository? It helps the project grow! ⭐\""
+            f"{_tail(args_text, 'Extra instructions')}"
+        )
     return (
-        "请你 git pull 更新一下 GA 你自己，官方渠道 "
-        "https://github.com/Lsdefine/GenericAgent ，"
-        "自动合并解决冲突，优先上游分支，本地修改代码也进行保留但不进行 commit。"
+        "请你更新当前 GenericAgent 仓库，官方上游为 "
+        "https://github.com/Lsdefine/GenericAgent 。\n"
+        "1. 先 fetch upstream；识别当前分支，以及是否存在领先 upstream 的本地 commit。\n"
+        "2. 给出简洁预览：本地尚未包含的 upstream 最近提交（短 hash + 标题 + 日期）及变更文件摘要。\n"
+        "3. 执行更新（工作区未提交的改动始终要保留）：\n"
+        "   - 若存在本地 commit：将 upstream 合并进当前分支，自动解决冲突且优先上游。\n"
+        "   - 否则：执行 `git reset --mixed upstream/main`，使本地 `main` 与 upstream/main 完全对齐，自动解决冲突且优先上游。本地修改保留但不要进行commit。\n"
+        "4. 最后给出简短小结：分支 HEAD、变更文件、冲突/解决方式。\n"
+        "\n"
+        "#### 向用户说 'Congratulations! 🎉'\n"
+        "更新成功后，请对用户说：\"Congratulations! 🎉 你已成功更新 GenericAgent！\"\n"
+        "\n"
+        "#### 邀请用户点 Star ⭐\n"
+        "随后可邀请：\"如果觉得有帮助，要不要给 GenericAgent 仓库点个 Star？这会让项目成长更快！⭐\""
         f"{_tail(args_text)}"
     )
 
@@ -98,6 +224,23 @@ def build_hive_prompt(args_text: str = "") -> str:
         "memory/goal_hive_sop.md。"
         "集群目标 / worker 配额 / 终止条件未明确时先 ask_user 补齐再启动。"
         f"{_tail(args_text, '集群目标')}"
+    )
+
+
+def build_conductor_prompt(args_text: str = "") -> str:
+    """`/conductor <task>` → run `frontends/conductor.py` on the task.
+
+    Upstream `memory/` ships no conductor SOP, so we deliberately keep the
+    prompt short: name the entrypoint and forward the task verbatim.  The
+    agent is expected to know how to drive `conductor.py` (or consult a
+    local SOP if one happens to be installed).
+    """
+    args_text = (args_text or "").strip()
+    if args_text:
+        return f"请调用 frontends/conductor.py 执行：{args_text}"
+    return (
+        "请调用 frontends/conductor.py，根据后续指令完成多 subagent 编排。"
+        "若任务描述缺失，先 ask_user 一次性补齐。"
     )
 
 
@@ -219,7 +362,7 @@ def start_service(name: str) -> tuple[bool, str]:
         flags = 0
         if os.name == "nt":
             flags = 0x00000200 | 0x08000000  # NEW_PROCESS_GROUP | NO_WINDOW
-        subprocess.Popen(
+        proc = subprocess.Popen(
             svc["cmd"],
             cwd=str(_ROOT),
             creationflags=flags,
@@ -228,9 +371,132 @@ def start_service(name: str) -> tuple[bool, str]:
             stderr=subprocess.DEVNULL,
             close_fds=True,
         )
-        return True, f"已启动 {svc['name']}"
+        # Poll-and-confirm: if the child dies immediately (bad path, import
+        # error, port-in-use, etc) Popen still returns happily — without this
+        # check the picker would tick "✅ started" while nothing is running,
+        # which is exactly the bug#4 the user hit.  0.4s is the smallest
+        # window that catches "explodes at import" without making the UI
+        # feel laggy on healthy starts.
+        time.sleep(0.4)
+        rc = proc.poll()
+        if rc is not None:
+            return False, f"启动失败 (退出码 {rc}): {svc['name']}"
+        invalidate_running_cache()
+        return True, f"已启动 {svc['name']} (pid={proc.pid})"
     except Exception as e:
         return False, f"启动失败: {type(e).__name__}: {e}"
+
+
+# ----- running-state introspection (bug#4) --------------------------------
+# Why psutil cmdline-scan instead of a launched-by-us pid registry?
+#   • Services launched by a previous TUI run, or by hub.pyw, must also be
+#     recognised — otherwise /scheduler would happily start a duplicate.
+#   • A registry tied to this process dies when the TUI restarts, but the
+#     services keep running (CREATE_NEW_PROCESS_GROUP).  Cmdline scan is the
+#     only single source of truth across launchers, surviving restarts.
+# Trade-off: it costs ~30ms per /scheduler open, and matches by cmdline tail,
+# so two checkouts of GA can collide.  We accept that — running two GAs out
+# of two clones is already an unsupported configuration.
+
+def _match_service(cmdline: list[str], svc: dict) -> bool:
+    """Does this OS process belong to `svc`?  Match on the trailing script
+    arg (`reflect/foo.py` for reflect tasks, `frontends/bar.py` for apps),
+    which is invariant across `python` vs `pythonw` vs venv shims.
+
+    Reflect detection used to require BOTH `agentmain.py` AND the reflect
+    path in cmdline.  That rejected tasks launched directly (`python
+    reflect/scheduler.py`) by launch.pyw, dev scripts, or by an earlier
+    TUI run that used a different launcher — they showed unticked in
+    /scheduler even when alive.  Path-only match handles both styles; the
+    Python-process pre-filter in `running_services` keeps false positives
+    (greps, editors with the file open) from sneaking in."""
+    if not cmdline:
+        return False
+    rel = svc["name"]  # 'reflect/foo.py' | 'frontends/bar.py'
+    rel_norm = rel.replace("/", os.sep)
+    return any(rel_norm in (a or "") or rel in (a or "")
+               for a in cmdline)
+
+
+# 2s TTL cache + name-prefilter: ~2.1s → ~1.0s cold, ~0ms warm.
+# cmdline() is the per-proc cost; only pay it for python-ish survivors.
+_RUNNING_CACHE: tuple[float, dict[str, int]] | None = None
+_RUNNING_TTL = 2.0
+
+
+def invalidate_running_cache() -> None:
+    """Drop the snapshot. Call after start/stop so the next read is fresh."""
+    global _RUNNING_CACHE
+    _RUNNING_CACHE = None
+
+
+def running_services(use_cache: bool = True) -> dict[str, int]:
+    """{service_name: pid} for live services. {} if psutil missing."""
+    global _RUNNING_CACHE
+    if use_cache and _RUNNING_CACHE and time.time() - _RUNNING_CACHE[0] < _RUNNING_TTL:
+        return dict(_RUNNING_CACHE[1])
+    try:
+        import psutil  # type: ignore
+    except Exception:
+        return {}
+    svcs = list_launchable_services()
+    out: dict[str, int] = {}
+    me = os.getpid()
+    for proc in psutil.process_iter(["pid", "name"]):
+        try:
+            if proc.info["pid"] == me:
+                continue
+            nm = (proc.info.get("name") or "").lower()
+            if "python" not in nm and "py.exe" not in nm:
+                continue
+            cmd = proc.cmdline()
+        except Exception:
+            continue
+        for svc in svcs:
+            if svc["name"] not in out and _match_service(cmd, svc):
+                out[svc["name"]] = proc.info["pid"]
+                break
+    _RUNNING_CACHE = (time.time(), dict(out))
+    return out
+
+
+def stop_service(name: str) -> tuple[bool, str]:
+    """Terminate the service `name` if running.  Returns (ok, message).
+
+    Sends SIGTERM-equivalent (Popen.terminate on Windows = TerminateProcess),
+    waits up to 3s, then escalates to kill.  Also reaps obvious children
+    (e.g. `python -m streamlit` spawns the actual streamlit worker) so we
+    don't leave orphans behind.
+    """
+    try:
+        import psutil  # type: ignore
+    except Exception:
+        return False, "未安装 psutil，无法停止服务"
+    running = running_services()
+    pid = running.get(name)
+    if pid is None:
+        return False, f"{name} 未在运行"
+    try:
+        parent = psutil.Process(pid)
+        kids = parent.children(recursive=True)
+        for p in [parent, *kids]:
+            try:
+                p.terminate()
+            except Exception:
+                pass
+        gone, alive = psutil.wait_procs([parent, *kids], timeout=3.0)
+        for p in alive:
+            try:
+                p.kill()
+            except Exception:
+                pass
+        invalidate_running_cache()
+        return True, f"已停止 {name} (pid={pid})"
+    except psutil.NoSuchProcess:
+        invalidate_running_cache()
+        return True, f"{name} 已退出"
+    except Exception as e:
+        return False, f"停止失败: {type(e).__name__}: {e}"
 
 
 def list_scheduler_tasks() -> list[dict]:
@@ -296,13 +562,19 @@ PALETTE_ENTRIES: list[tuple[str, str, str]] = [
     ("/morphling", "[target]",  "启用 Morphling 蒸馏 / 吞噬外部技能"),
     ("/goal",      "[goal]",    "进入 Goal 模式（需 condition 约束）"),
     ("/hive",      "[target]",  "进入 Hive 多 worker 协作模式"),
-    ("/scheduler", "",          "多选启动 reflect 任务 / 查看 cron"),
+    ("/conductor", "[task]",    "调用 frontends/conductor.py 多 subagent 编排"),
+    ("/scheduler", "",          "多选启动/停止 reflect 任务（cron 由 reflect/scheduler.py 驱动）"),
+    ("/resume",    "",           "列出最近会话并恢复其中一个（GA 端展开 prompt）"),
 ]
 
 
 def prompt_for(cmd: str, args_text: str) -> Optional[str]:
     """Return the injected user-message for a given slash command, or None if
     the command isn't one of ours (e.g. /scheduler — handled by TUI directly).
+
+    Language is resolved inside the builders that care about it (see
+    `_current_lang()`); callers never thread it through, so both TUIs keep a
+    single uniform call site.
     """
     table = {
         "/update":    build_update_prompt,
@@ -310,6 +582,7 @@ def prompt_for(cmd: str, args_text: str) -> Optional[str]:
         "/morphling": build_morphling_prompt,
         "/goal":      build_goal_prompt,
         "/hive":      build_hive_prompt,
+        "/conductor": build_conductor_prompt,
     }
     fn = table.get(cmd)
     return fn(args_text) if fn else None

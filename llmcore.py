@@ -646,7 +646,7 @@ class BaseSession:
                     tu = {'name': block.get('name', ''), 'arguments': block.get('input', {})}
                     yield f'<tool_use>{json.dumps(tu, ensure_ascii=False)}</tool_use>'
             if content.strip() and not content.startswith("!!!Error:"): self.history.append({"role": "assistant", "content": [{"type": "text", "text": content}]})
-        return _ask_gen() if self.stream else ''.join(list(_ask_gen()))
+        return _ask_gen()
 
 def _keep_claude_block(b): return not isinstance(b, dict) or b.get("type") != "thinking" or b.get("signature")
 def _drop_unsigned_thinking(messages):
@@ -710,39 +710,47 @@ def _strip_trailing_whitespace_blocks(content):
     return content
 
 def _fix_messages(messages):
-    """修复 messages 符合 Claude API：交替、tool_use/tool_result 配对"""
     if not messages: return messages
-    _wrap = lambda c: c if isinstance(c, list) else [{"type": "text", "text": str(c)}]
-    fixed = []
+    W = lambda c: c if isinstance(c, list) else [{"type": "text", "text": str(c)}]
+    merged = []
     for m in messages:
-        if fixed and m['role'] == fixed[-1]['role']:
-            fixed[-1] = {**fixed[-1], 'content': _wrap(fixed[-1].get('content', [])) + [{"type": "text", "text": "\n"}] + _wrap(m.get('content', []))}; continue
-        if fixed and fixed[-1]['role'] == 'assistant' and m['role'] == 'user':
-            uses = [b.get('id') for b in _wrap(fixed[-1].get('content', [])) if isinstance(b, dict) and b.get('type') == 'tool_use' and b.get('id')]
-            if uses:
-                got, rest = {}, []
-                for b in _wrap(m.get('content', [])):
-                    if isinstance(b, dict) and b.get('type') == 'tool_result':
-                        tid = b.get('tool_use_id')
-                        if tid in uses and tid not in got: got[tid] = b
-                        else: rest.append({"type":"text","text":str(b.get('content',''))})
-                    else: rest.append(b)
-                m = {**m, 'content': [got.get(uid) or {"type": "tool_result", "tool_use_id": uid, "content": "(error)"} for uid in uses] + rest}
-            else: m = {**m, 'content': [{"type":"text","text":str(b.get('content',''))} if isinstance(b,dict) and b.get('type')=='tool_result' else b for b in _wrap(m.get('content', []))]}
-        fixed.append(m)
-    while fixed and fixed[0]['role'] != 'user': fixed.pop(0)
-    # Strip trailing whitespace-only text blocks from each message's content. Such blocks
-    # are leftover separators that BigModel's anthropic-compat layer rejects.
-    for m in fixed:
+        if m.get('role') not in ('user', 'assistant'): continue
+        blocks = W(m.get('content', []))
+        if merged and m['role'] == merged[-1]['role']:
+            merged[-1]['content'] += [{"type": "text", "text": "\n"}] + blocks
+        else:
+            merged.append({"role": m['role'], "content": list(blocks)})
+    while merged and merged[0]['role'] != 'user': merged.pop(0)
+    if not merged: return []
+    prev_uses = []
+    for m in merged:
+        c = m['content']
+        if m['role'] == 'assistant':
+            seen, out = set(), []
+            for b in c:
+                uid = b.get('id') if isinstance(b, dict) and b.get('type') == 'tool_use' else None
+                if uid and uid in seen: continue
+                if uid: seen.add(uid)
+                out.append(b)
+            m['content'] = out
+            prev_uses = [b.get('id') for b in out if isinstance(b, dict) and b.get('type') == 'tool_use']
+        else:
+            got, rest = {}, []
+            for b in c:
+                tid = b.get('tool_use_id') if isinstance(b, dict) and b.get('type') == 'tool_result' else None
+                if tid and tid in prev_uses and tid not in got: got[tid] = b
+                elif isinstance(b, dict) and b.get('type') == 'tool_result': rest.append({"type": "text", "text": str(b.get('content', ''))})
+                else: rest.append(b)
+            m['content'] = [got.get(u) or {"type": "tool_result", "tool_use_id": u, "content": "(error)"} for u in prev_uses] + rest
+            prev_uses = []
+    # Strip trailing whitespace-only text blocks from each message's content
+    for m in merged:
         c = m.get('content')
         if isinstance(c, list):
             new_c = list(c); _strip_trailing_whitespace_blocks(new_c)
-            if not new_c: new_c = [{"type": "text", "text": "(empty)"}]  # keep at least one block
+            if not new_c: new_c = [{"type": "text", "text": "(empty)"}]
             if new_c is not c: m['content'] = new_c
-    if fixed and fixed[0]['role'] == 'user':
-        fixed[0] = {**fixed[0], 'content': [{"type":"text","text":str(b.get('content',''))} if isinstance(b,dict) and b.get('type')=='tool_result' else b for b in _wrap(fixed[0].get('content', []))]}
-
-    return fixed
+    return merged
 
 class NativeClaudeSession(BaseSession):
     def __init__(self, cfg):
@@ -1032,7 +1040,7 @@ class MixinSession:
         self.model = getattr(self._sessions[0], 'model', None)
         self._cur_idx, self._switched_at = 0, 0.0
     def __getattr__(self, name): return getattr(self._sessions[0], name)
-    _BROADCAST_ATTRS = frozenset({'system', 'tools', 'temperature', 'max_tokens', 'reasoning_effort', 'history'})
+    _BROADCAST_ATTRS = frozenset({'system', 'tools', 'temperature', 'max_tokens', 'reasoning_effort', 'history', 'stream', 'read_timeout'})
     def __setattr__(self, name, value):
         if name in self._BROADCAST_ATTRS:
             for s in self._sessions:
