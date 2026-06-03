@@ -12,10 +12,10 @@
       theme: {
         extend: {
           colors: {
-            ink: { 950: '#08080a', 900: '#0e0e12', 850: '#13131a', 800: '#191923', 700: '#22222e', 600: '#2d2d3b', 500: '#393949' },
-            frost: { 50: '#f7f8fb', 100: '#e6e8ef', 200: '#c8ccd8', 300: '#9ea4b6', 400: '#737988', 500: '#515564' },
-            brand: { 50: '#eef4ff', 100: '#dbe8ff', 400: '#5aa5ff', 500: '#4a9eff', 600: '#2a7ae0', 700: '#1e63ba' },
-            accent: { green: '#4ade80', amber: '#fbbf24', rose: '#fb7185', violet: '#a78bfa', pink: '#ec4899' },
+            ink: { 950: '#0d0d0d', 900: '#111111', 850: '#171717', 800: '#1a1a1a', 700: '#222222', 600: '#2a2a2a', 500: '#333333' },
+            frost: { 50: '#f7f7f8', 100: '#e8e8e8', 200: '#c0c0c0', 300: '#999999', 400: '#777777', 500: '#555555' },
+            brand: { 50: '#e6f7f2', 100: '#b3e8d8', 400: '#10a37f', 500: '#0d8c6d', 600: '#0a7559', 700: '#085e47' },
+            accent: { green: '#10a37f', amber: '#fbbf24', rose: '#fb7185', violet: '#10a37f', pink: '#f59e0b' },
           },
           fontFamily: {
             sans: ['"Inter"', '"Segoe UI Variable"', '"Segoe UI"', '"PingFang SC"', '"Microsoft YaHei UI"', 'system-ui', 'sans-serif'],
@@ -74,183 +74,107 @@
 </head>
 <body class="h-screen overflow-hidden text-frost-100 font-sans text-[13px] antialiased app-bg">
   <div id="app" class="flex h-full overflow-hidden">
-    <!-- ═══════════ SIDEBAR ═══════════ -->
-    <aside id="sidebar"
-      class="sidebar-glass shrink-0 w-[280px] flex flex-col transition-all duration-200 overflow-hidden">
-      <!-- Brand -->
-      <div class="flex items-center justify-between px-4 pt-4 pb-3 shrink-0">
-        <div class="flex items-center gap-2.5 min-w-0">
-          <div class="w-9 h-9 rounded-xl bg-gradient-to-br from-brand-400 via-accent-violet to-accent-pink flex items-center justify-center shadow-brand">
-            <i data-lucide="sparkles" class="w-4.5 h-4.5 text-white" style="width:18px;height:18px"></i>
-          </div>
-          <span class="font-semibold text-frost-50 tracking-tight text-[15.5px]">GenericAgent</span>
-        </div>
-        <button id="sidebar-collapse" class="w-8 h-8 rounded-lg text-frost-300 hover:text-frost-50 hover:bg-white/8 flex items-center justify-center transition" title="收起">
+    <!-- ═══════════ SIDEBAR (Codex-style) ═══════════ -->
+    <!-- ═══════════ SIDEBAR (Codex-style: navigation + session list) ═══════════ -->
+    <div id="sidebar" class="sidebar-glass flex flex-col shrink-0 transition-all duration-200 overflow-hidden" style="width:260px;min-width:200px;max-width:420px">
+      <!-- ── Header: New Chat + Collapse ── -->
+      <div class="flex items-center gap-2 px-3 pt-3 pb-1 shrink-0">
+        <button id="btn-new-chat" class="flex-1 flex items-center gap-2 px-3 py-1.5 rounded-md text-[13px] text-white hover:bg-white/8 transition" title="新对话">
+          <i data-lucide="plus" class="w-4 h-4"></i><span>新对话</span>
+        </button>
+        <button id="sidebar-collapse" class="p-1.5 text-white/40 hover:text-white hover:bg-white/8 rounded-md transition" title="收起">
           <i data-lucide="panel-left-close" class="w-4 h-4"></i>
         </button>
       </div>
 
-      <!-- Nav tabs -->
-      <nav class="flex gap-1 px-3 mb-3 shrink-0" id="nav-tabs">
-        <button data-tab="chat" class="tab-btn flex-1 px-2 py-2 rounded-lg text-[12.5px] font-medium transition flex items-center justify-center gap-1.5">
-          <i data-lucide="message-square" class="w-3.5 h-3.5"></i>对话
+      <!-- ── Nav Menu (compact Codex-style) ── -->
+      <nav class="px-2 pt-1 pb-1 shrink-0 space-y-px">
+        <button data-tab="chat" class="tab-btn w-full flex items-center gap-2.5 px-3 py-[7px] rounded-md text-[13px] transition">
+          <i data-lucide="message-square" class="w-[15px] h-[15px]"></i><span>对话</span>
         </button>
-        <button data-tab="skills" class="tab-btn flex-1 px-2 py-2 rounded-lg text-[12.5px] font-medium transition flex items-center justify-center gap-1.5">
-          <i data-lucide="layout-grid" class="w-3.5 h-3.5"></i>能力
+        <button data-tab="skills" class="tab-btn w-full flex items-center gap-2.5 px-3 py-[7px] rounded-md text-[13px] transition">
+          <i data-lucide="layout-grid" class="w-[15px] h-[15px]"></i><span>技能</span>
         </button>
-        <button data-tab="settings" class="tab-btn flex-1 px-2 py-2 rounded-lg text-[12.5px] font-medium transition flex items-center justify-center gap-1.5">
-          <i data-lucide="settings" class="w-3.5 h-3.5"></i>设置
+        <button data-tab="tasks" class="tab-btn w-full flex items-center gap-2.5 px-3 py-[7px] rounded-md text-[13px] transition">
+          <i data-lucide="list-checks" class="w-[15px] h-[15px]"></i><span>自动化</span>
+        </button>
+        <button data-tab="mcp" class="tab-btn w-full flex items-center gap-2.5 px-3 py-[7px] rounded-md text-[13px] transition">
+          <i data-lucide="plug" class="w-[15px] h-[15px]"></i><span>MCP</span>
+        </button>
+        <button data-tab="settings" class="tab-btn w-full flex items-center gap-2.5 px-3 py-[7px] rounded-md text-[13px] transition">
+          <i data-lucide="settings" class="w-[15px] h-[15px]"></i><span>设置</span>
         </button>
       </nav>
 
-      <!-- Chat-tab sidebar content -->
-      <div id="sidebar-chat" class="flex flex-col min-h-0 flex-1 px-3 pb-3">
-        <button id="btn-new-chat" class="group w-full mb-4 px-3.5 py-2.5 rounded-xl bg-gradient-to-br from-white/12 to-white/6 hover:from-white/18 hover:to-white/10 active:scale-[0.98] border border-white/10 hover:border-white/20 text-frost-50 flex items-center gap-2.5 text-[13.5px] font-medium transition shadow-soft">
-          <span class="w-5 h-5 rounded-md bg-gradient-to-br from-brand-400 to-accent-violet flex items-center justify-center"><i data-lucide="plus" class="w-3.5 h-3.5 text-white"></i></span>
-          新对话
-        </button>
-
-        <!-- Recent sessions -->
-        <div class="flex items-center justify-between px-2 pb-1.5">
-          <span class="text-[11px] font-semibold text-frost-300 uppercase tracking-[0.08em]">最近对话</span>
-          <button id="btn-refresh-sessions" class="p-1 rounded text-frost-300 hover:text-frost-50 hover:bg-white/8 transition" title="刷新">
-            <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
-          </button>
-        </div>
-        <div class="relative px-2 pb-2">
-          <i data-lucide="search" class="w-3.5 h-3.5 text-frost-400 absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none"></i>
+      <!-- ── Search bar (toggled) ── -->
+      <div id="search-bar" class="px-3 pb-1 shrink-0">
+        <div class="relative">
+          <i data-lucide="search" class="w-3.5 h-3.5 text-white/30 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none"></i>
           <input id="session-search" type="text" placeholder="搜索对话..."
-            class="w-full pl-7 pr-2 py-1.5 bg-white/5 border border-white/8 rounded-md text-[12px] text-frost-100 placeholder:text-frost-400 outline-none focus:border-brand-400 focus:bg-white/8 transition" />
+            class="w-full pl-7 pr-2 py-1.5 bg-white/5 border border-white/10 rounded-md text-[12px] text-white placeholder:text-white/30 outline-none focus:border-[#007ACC]/60 transition" />
         </div>
-        <div id="sessions-list" class="flex-1 min-h-0 overflow-y-auto space-y-1 pr-0.5">
-          <div class="text-frost-300 text-[12.5px] p-2 text-center">加载中...</div>
-        </div>
+      </div>
 
-        <!-- Actions -->
-        <div class="pt-3 mt-3 border-t border-white/8 space-y-0.5 shrink-0">
-          <div class="text-[11px] font-semibold text-frost-300 uppercase tracking-[0.08em] px-2 pb-1.5">操作</div>
-          <button data-action="next_llm" class="action-btn"><i data-lucide="arrow-right-left" class="w-4 h-4"></i>切换备用链路</button>
-          <button data-action="reinject_tools" class="action-btn"><i data-lucide="wrench" class="w-4 h-4"></i>重新注入工具</button>
-          <button data-action="desktop_pet" class="action-btn"><span class="text-[14px] w-4 flex justify-center">🐱</span><span>桌面宠物</span></button>
+      <!-- ── Session List (always visible, not switched by tab) ── -->
+      <div class="px-3 pt-3 pb-1 shrink-0">
+        <span class="text-[11px] font-semibold text-white/40 uppercase tracking-[0.08em]">对话</span>
+      </div>
+      <div class="flex-1 min-h-0 overflow-y-auto px-2 pb-2">
+        <div id="sessions-list" class="space-y-px">
+          <div class="text-white/30 text-[12px] p-4 text-center">加载中...</div>
         </div>
+      </div>
 
-        <!-- Autonomous -->
-        <div class="pt-3 mt-3 border-t border-white/8 shrink-0">
-          <div class="text-[11px] font-semibold text-frost-300 uppercase tracking-[0.08em] px-2 pb-2">自主行动</div>
-          <div class="flex items-center justify-between px-2 py-1.5 rounded-lg bg-white/3 mb-1.5">
-            <div class="flex flex-col">
-              <span class="text-[10.5px] text-frost-300 uppercase tracking-wider">空闲</span>
-              <span id="idle-value" class="text-[14px] font-mono font-semibold text-frost-50">—</span>
-            </div>
-            <label class="relative inline-flex items-center cursor-pointer">
-              <input type="checkbox" id="autonomous-toggle" class="sr-only peer">
-              <div class="w-10 h-5 bg-white/10 peer-checked:bg-gradient-to-r peer-checked:from-brand-400 peer-checked:to-accent-violet rounded-full transition"></div>
-              <div class="absolute left-0.5 top-0.5 bg-white w-4 h-4 rounded-full shadow transition peer-checked:translate-x-5"></div>
-            </label>
-          </div>
-          <button data-action="idle_trigger" class="action-btn text-[12px]">
-            <i data-lucide="timer-reset" class="w-4 h-4"></i>立即触发自主
+      <!-- ── Bottom bar ── -->
+      <div class="px-3 py-2 border-t border-white/6 shrink-0">
+        <div class="flex items-center gap-2">
+          <span class="text-[11px] text-white/40">自主</span>
+          <span id="idle-value" class="text-[11px] font-mono text-white/40">—</span>
+          <label class="relative inline-flex items-center cursor-pointer" title="自主行动">
+            <input type="checkbox" id="autonomous-toggle" class="sr-only peer">
+            <div class="w-7 h-3.5 bg-white/10 peer-checked:bg-[#007ACC] rounded-full transition"></div>
+            <div class="absolute left-0.5 top-0.5 bg-white/30 peer-checked:bg-white w-2.5 h-2.5 rounded-full shadow transition peer-checked:translate-x-3.5"></div>
+          </label>
+          <button data-action="idle_trigger" class="p-1 text-white/30 hover:text-white transition" title="触发自主"><i data-lucide="timer-reset" class="w-3.5 h-3.5"></i></button>
+          <span id="autonomous-dot" class="w-1.5 h-1.5 rounded-full bg-white/10 transition"></span>
+          <div class="flex-1"></div>
+          <button id="theme-toggle-rail" class="p-1 text-white/30 hover:text-white transition" title="切换主题">
+            <i data-lucide="moon" class="w-3.5 h-3.5 theme-icon-dark"></i>
+            <i data-lucide="sun" class="w-3.5 h-3.5 theme-icon-light hidden"></i>
           </button>
-          <div class="flex items-center gap-1.5 px-2 py-1 text-[11.5px] text-frost-300">
-            <span id="autonomous-dot" class="w-1.5 h-1.5 rounded-full bg-frost-500 transition"></span>
-            <span id="autonomous-hint-text">已停止</span>
-          </div>
         </div>
       </div>
-
-      <!-- Settings-tab sidebar content -->
-      <div id="sidebar-settings" class="hidden flex-col min-h-0 flex-1 px-4 pb-4 overflow-y-auto">
-        <div class="text-[11px] font-semibold text-frost-300 uppercase tracking-[0.08em] px-1 pb-2">说明</div>
-        <p class="text-[12.5px] text-frost-300 leading-[1.7] px-1 mb-4">
-          在右侧管理 LLM 接入凭证和参数，修改后<span class="text-frost-100">保存</span>再<span class="text-frost-100">热重载</span>即可生效。
-        </p>
-        <div class="text-[11px] font-semibold text-frost-300 uppercase tracking-[0.08em] px-1 pb-2">会话类型</div>
-        <div class="space-y-2.5 px-1">
-          <div class="flex items-start gap-2">
-            <span class="mt-1.5 w-1.5 h-1.5 rounded-full bg-accent-violet shrink-0"></span>
-            <div class="min-w-0">
-              <div class="text-[12.5px] text-frost-100 font-medium">native_claude</div>
-              <div class="text-[11px] text-frost-400">Anthropic / CC 协议</div>
-            </div>
-          </div>
-          <div class="flex items-start gap-2">
-            <span class="mt-1.5 w-1.5 h-1.5 rounded-full bg-brand-400 shrink-0"></span>
-            <div class="min-w-0">
-              <div class="text-[12.5px] text-frost-100 font-medium">native_oai</div>
-              <div class="text-[11px] text-frost-400">OpenAI / 兼容协议</div>
-            </div>
-          </div>
-          <div class="flex items-start gap-2">
-            <span class="mt-1.5 w-1.5 h-1.5 rounded-full bg-accent-pink shrink-0"></span>
-            <div class="min-w-0">
-              <div class="text-[12.5px] text-frost-100 font-medium">mixin</div>
-              <div class="text-[11px] text-frost-400">多节点故障转移</div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Skills-tab sidebar content -->
-      <div id="sidebar-skills" class="hidden flex-col min-h-0 flex-1 px-3 pb-3 overflow-y-auto">
-        <div class="text-[11px] font-semibold text-frost-300 uppercase tracking-[0.08em] px-2 pb-2">分类</div>
-        <div id="skills-categories" class="space-y-1"></div>
-        <div class="mt-5 text-[11px] font-semibold text-frost-300 uppercase tracking-[0.08em] px-2 pb-2">统计</div>
-        <div id="skills-stats" class="px-2 text-[12.5px] text-frost-200 space-y-1.5"></div>
-      </div>
-
-      <!-- Footer: theme switch -->
-      <div class="shrink-0 px-3 py-3 border-t border-white/8 bg-white/3">
-        <label class="theme-switch flex items-center justify-between gap-3 px-3 py-2 rounded-xl cursor-pointer select-none">
-          <span class="flex items-center gap-2 min-w-0">
-            <span class="theme-switch-label-text text-[12.5px] font-medium">
-              <span class="theme-icon-dark">深色模式</span>
-              <span class="theme-icon-light hidden">浅色模式</span>
-            </span>
-          </span>
-          <span class="theme-switch-track">
-            <input type="checkbox" id="theme-toggle" class="sr-only">
-            <span class="theme-switch-track-ic theme-switch-track-ic-moon">
-              <i data-lucide="moon" class="w-3 h-3"></i>
-            </span>
-            <span class="theme-switch-track-ic theme-switch-track-ic-sun">
-              <i data-lucide="sun" class="w-3 h-3"></i>
-            </span>
-            <span class="theme-switch-thumb">
-              <i data-lucide="moon" class="w-3 h-3 theme-icon-dark"></i>
-              <i data-lucide="sun" class="w-3 h-3 theme-icon-light hidden"></i>
-            </span>
-          </span>
-        </label>
-      </div>
-    </aside>
-
-    <!-- Collapsed rail -->
-    <div id="sidebar-rail" class="hidden w-11 bg-ink-900 border-r border-ink-700/60 flex-col items-center py-3 gap-1.5 shrink-0">
-      <button id="sidebar-expand" class="w-8 h-8 rounded-md text-frost-400 hover:text-frost-50 hover:bg-ink-700/60 flex items-center justify-center" title="展开">
-        <i data-lucide="panel-left-open" class="w-4 h-4"></i>
-      </button>
-      <button id="rail-new-chat" class="w-8 h-8 rounded-md text-frost-400 hover:text-frost-50 hover:bg-ink-700/60 flex items-center justify-center" title="新对话">
-        <i data-lucide="plus" class="w-4 h-4"></i>
-      </button>
-      <button id="rail-skills" class="w-8 h-8 rounded-md text-frost-400 hover:text-frost-50 hover:bg-ink-700/60 flex items-center justify-center" title="能力">
-        <i data-lucide="layout-grid" class="w-4 h-4"></i>
-      </button>
     </div>
 
-    <!-- ═══════════ MAIN ═══════════ -->
-    <div class="flex-1 min-w-0 flex flex-col overflow-hidden">
-      <!-- Topbar -->
-      <header class="h-12 px-5 flex items-center justify-between border-b border-white/5 bg-ink-900/40 backdrop-blur-xl shrink-0">
+    <!-- Collapsed state: mini icon column -->
+    <div id="sidebar-rail" class="hidden w-[44px] flex-col items-center py-3 gap-1 shrink-0" style="background:#1E1E1E">
+      <div class="w-7 h-7 rounded flex items-center justify-center mb-2 cursor-pointer bg-[#333] hover:bg-[#444] transition" id="sidebar-expand" title="展开">
+        <i data-lucide="sparkles" class="w-3.5 h-3.5 text-white"></i>
+      </div>
+      <button id="rail-new-chat" class="rail-btn" title="新对话"><i data-lucide="plus" class="w-4 h-4"></i></button>
+      <button data-tab="chat" class="rail-btn active" title="对话"><i data-lucide="message-square" class="w-4 h-4"></i></button>
+      <button data-tab="skills" class="rail-btn" title="技能"><i data-lucide="layout-grid" class="w-4 h-4"></i></button>
+      <button data-tab="tasks" class="rail-btn" title="自动化"><i data-lucide="list-checks" class="w-4 h-4"></i></button>
+      <div class="flex-1"></div>
+      <button data-tab="mcp" class="rail-btn" title="MCP"><i data-lucide="plug" class="w-4 h-4"></i></button>
+      <button data-tab="settings" class="rail-btn" title="设置"><i data-lucide="settings" class="w-4 h-4"></i></button>
+    </div>
+
+    <!-- Resize handle between sidebar and main -->
+    <div id="sidebar-resize-handle" class="w-1 cursor-col-resize hover:bg-[#007ACC]/40 active:bg-[#007ACC]/60 transition-colors shrink-0" title="拖拽调整侧栏宽度"></div>
+
+    <!-- ═══════════ MAIN (rounded container) ═══════════ -->
+    <div class="flex-1 min-w-0 flex flex-col overflow-hidden bg-[#1a1a1a] rounded-tl-xl border-l border-white/6">
+      <!-- Topbar (minimal: conversation title + model selector) -->
+      <header class="h-11 px-5 flex items-center border-b border-white/6 shrink-0">
         <div class="flex items-center gap-3 min-w-0 flex-1">
-          <span id="conversation-title" class="text-frost-50 font-medium truncate">新对话</span>
+          <span id="conversation-title" class="text-white/80 font-medium truncate text-[14px]">新对话</span>
         </div>
-        <div class="flex items-center gap-1.5 shrink-0">
-          <div id="llm-selector" class="relative flex items-center gap-1.5 px-2.5 py-1.5 bg-ink-700 hover:bg-ink-600 border border-ink-600 hover:border-ink-500 rounded-md cursor-pointer transition text-[11.5px] font-mono select-none">
-            <span class="w-1.5 h-1.5 rounded-full bg-brand-400 shadow-[0_0_4px_rgba(74,158,255,0.6)]"></span>
-            <span id="llm-name" class="max-w-[220px] truncate text-frost-100">—</span>
-            <i data-lucide="chevron-down" class="w-3 h-3 text-frost-400"></i>
-            <div id="llm-dropdown" class="hidden absolute top-full right-0 mt-1.5 min-w-[280px] max-w-[340px] bg-ink-700 border border-ink-500 rounded-lg shadow-pop z-50 p-1"></div>
-          </div>
+        <div id="llm-selector" class="relative flex items-center gap-1 px-2.5 py-1 bg-white/5 hover:bg-white/8 rounded-lg cursor-pointer transition text-[11px] font-mono select-none shrink-0" title="切换模型">
+          <span class="w-1.5 h-1.5 rounded-full bg-brand-400 shadow-[0_0_4px_rgba(74,158,255,0.6)]"></span>
+          <span id="llm-name" class="max-w-[140px] truncate text-white/70">—</span>
+          <i data-lucide="chevron-down" class="w-3 h-3 text-white/40"></i>
+          <div id="llm-dropdown" class="hidden absolute top-full right-0 mt-2 min-w-[280px] max-w-[340px] bg-[#2a2a2a] border border-white/10 rounded-lg shadow-2xl z-50 p-1"></div>
         </div>
       </header>
 
@@ -289,7 +213,7 @@
             </div>
             <textarea id="input" rows="1" placeholder="为 GenericAgent 输入任务..."
               class="flex-1 min-w-0 bg-transparent border-none outline-none resize-none text-frost-50 placeholder:text-frost-400 max-h-[220px] py-1.5 px-1 text-[14px] leading-[1.55]"></textarea>
-            <button id="btn-send" class="w-10 h-10 rounded-2xl bg-gradient-to-br from-brand-400 to-brand-600 hover:brightness-110 active:scale-95 text-white flex items-center justify-center transition shadow-brand disabled:bg-none disabled:bg-ink-600 disabled:text-frost-400 disabled:cursor-not-allowed disabled:shadow-none" title="发送 (Enter)">
+            <button id="btn-send" class="w-10 h-10 rounded-2xl bg-gradient-to-br from-brand-400 to-brand-600 hover:brightness-110 active:scale-95 text-white flex items-center justify-center transition shadow-brand disabled:bg-none disabled:bg-ink-600 disabled:text-frost-400 disabled:cursor-not-allowed disabled:shadow-none shrink-0" title="发送 (Enter)">
               <i data-lucide="arrow-up" class="w-4 h-4 send-ic-send"></i>
               <i data-lucide="square" class="w-3.5 h-3.5 send-ic-stop hidden" fill="currentColor"></i>
             </button>
@@ -404,6 +328,198 @@
             </button>
           </div>
           </div>
+        </div>
+      </main>
+
+      <!-- ─── MCP view ─── -->
+      <main id="view-mcp" class="hidden flex-1 overflow-y-auto settings-bg">
+        <div class="px-10 py-10 max-w-4xl mx-auto">
+          <div class="relative overflow-hidden rounded-3xl p-7 mb-8 border border-white/5 settings-hero">
+            <div class="absolute inset-0 bg-gradient-to-br from-brand-500/12 via-accent-violet/8 to-accent-pink/6"></div>
+            <div class="absolute -top-16 -right-16 w-64 h-64 bg-brand-400/15 rounded-full blur-3xl"></div>
+            <div class="relative">
+              <h1 class="text-2xl font-bold text-frost-50 flex items-center gap-3"><i data-lucide="plug" class="w-7 h-7 text-brand-400"></i> MCP 服务器</h1>
+              <p class="text-frost-300 text-sm mt-2">管理 Model Context Protocol 工具服务器连接</p>
+            </div>
+          </div>
+          <div id="mcp-servers-list" class="space-y-3"></div>
+          <button id="btn-add-mcp-server" class="mt-4 px-4 py-2 rounded-lg bg-brand-500/20 text-brand-300 text-[13px] font-medium hover:bg-brand-500/30 transition flex items-center gap-2">
+            <i data-lucide="plus" class="w-4 h-4"></i> 添加 MCP 服务器
+          </button>
+          <!-- MCP Add Form (hidden by default) -->
+          <div id="mcp-add-form" class="hidden mt-4 p-4 rounded-xl bg-white/5 border border-white/10 space-y-3">
+            <h3 class="text-[13px] font-semibold text-frost-100">新增 MCP 服务器</h3>
+            <div>
+              <label class="block text-[11px] text-frost-400 mb-1">名称 *</label>
+              <input id="mcp-add-name" type="text" placeholder="例如: my-tools" class="w-full px-3 py-1.5 bg-white/5 border border-white/10 rounded-lg text-[12px] text-frost-100 placeholder:text-frost-500 outline-none focus:border-brand-400/50 transition">
+            </div>
+            <div>
+              <label class="block text-[11px] text-frost-400 mb-1">URL *</label>
+              <input id="mcp-add-url" type="text" placeholder="http://localhost:8080/mcp" class="w-full px-3 py-1.5 bg-white/5 border border-white/10 rounded-lg text-[12px] text-frost-100 placeholder:text-frost-500 outline-none focus:border-brand-400/50 transition">
+            </div>
+            <div>
+              <label class="block text-[11px] text-frost-400 mb-1">传输协议</label>
+              <select id="mcp-add-transport" class="w-full px-3 py-1.5 bg-white/5 border border-white/10 rounded-lg text-[12px] text-frost-100 outline-none focus:border-brand-400/50 transition">
+                <option value="http">HTTP</option>
+                <option value="sse">SSE</option>
+                <option value="stdio">Stdio</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-[11px] text-frost-400 mb-1">自定义 Headers (JSON)</label>
+              <textarea id="mcp-add-headers" rows="2" placeholder='{"Authorization": "Bearer xxx"}' class="w-full px-3 py-1.5 bg-white/5 border border-white/10 rounded-lg text-[12px] text-frost-100 placeholder:text-frost-500 outline-none focus:border-brand-400/50 transition font-mono"></textarea>
+            </div>
+            <div>
+              <label class="block text-[11px] text-frost-400 mb-1">描述 (可选)</label>
+              <input id="mcp-add-desc" type="text" placeholder="简要描述服务器用途" class="w-full px-3 py-1.5 bg-white/5 border border-white/10 rounded-lg text-[12px] text-frost-100 placeholder:text-frost-500 outline-none focus:border-brand-400/50 transition">
+            </div>
+            <div class="flex items-center gap-2 pt-1">
+              <button id="mcp-add-confirm" class="px-4 py-1.5 rounded-lg bg-brand-500 text-white text-[12px] font-medium hover:bg-brand-600 transition">确认添加</button>
+              <button id="mcp-add-cancel" class="px-4 py-1.5 rounded-lg bg-white/8 text-frost-300 text-[12px] font-medium hover:bg-white/14 transition">取消</button>
+            </div>
+          </div>
+        </div>
+      </main>
+
+      <!-- ─── Tasks view ─── -->
+      <main id="view-tasks" class="hidden flex-1 overflow-y-auto settings-bg">
+        <div class="px-10 py-10 max-w-4xl mx-auto">
+          <!-- Hero -->
+          <div class="relative overflow-hidden rounded-3xl p-7 mb-8 border border-white/5 settings-hero">
+            <div class="absolute inset-0 bg-gradient-to-br from-brand-500/12 via-accent-violet/8 to-accent-pink/6"></div>
+            <div class="absolute -top-16 -right-16 w-64 h-64 bg-brand-400/15 rounded-full blur-3xl"></div>
+            <div class="absolute -bottom-16 -left-16 w-64 h-64 bg-accent-violet/10 rounded-full blur-3xl"></div>
+            <div class="relative">
+              <div class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/5 border border-white/10 text-[11px] text-frost-200 mb-3">
+                <i data-lucide="list-checks" class="w-3 h-3 text-brand-400"></i>Task Management
+              </div>
+              <h2 class="text-[26px] font-semibold tracking-tight leading-tight bg-gradient-to-br from-white to-frost-200 bg-clip-text text-transparent">任务管理</h2>
+              <p class="text-frost-300 text-[13px] mt-1.5">定时任务 · 持续目标 · Hive 协作集群</p>
+            </div>
+          </div>
+
+          <!-- Sub-tab navigation -->
+          <div class="flex items-center gap-1 p-1 bg-white/5 rounded-xl border border-white/8 mb-6">
+            <button id="task-tab-scheduler" class="sop-tab-btn active flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition">
+              <i data-lucide="clock" class="w-4 h-4"></i>定时任务
+            </button>
+            <button id="task-tab-goal" class="sop-tab-btn flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition">
+              <i data-lucide="target" class="w-4 h-4"></i>目标模式
+            </button>
+            <button id="task-tab-hive" class="sop-tab-btn flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition">
+              <i data-lucide="hexagon" class="w-4 h-4"></i>Hive 集群
+            </button>
+          </div>
+
+          <!-- ═══ Scheduler Section ═══ -->
+          <section id="task-panel-scheduler">
+            <div class="flex items-center justify-between mb-4">
+              <h3 class="text-[16px] font-semibold text-frost-50 flex items-center gap-2">
+                <i data-lucide="clock" class="w-4.5 h-4.5 text-brand-400" style="width:18px;height:18px"></i>定时任务
+                <span id="scheduler-count" class="text-xs font-medium text-frost-400 bg-white/5 px-2 py-0.5 rounded-full">0</span>
+              </h3>
+              <button id="btn-scheduler-add" class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-brand-500 hover:bg-brand-400 text-white text-[12.5px] font-medium transition">
+                <i data-lucide="plus" class="w-3.5 h-3.5"></i>新建任务
+              </button>
+            </div>
+            <div id="scheduler-list" class="space-y-3">
+              <div class="text-frost-300 text-[12.5px] p-4 text-center">加载中...</div>
+            </div>
+            <!-- Scheduler log -->
+            <div class="mt-6">
+              <button id="btn-scheduler-log" class="text-[12px] text-frost-400 hover:text-frost-200 flex items-center gap-1.5 transition">
+                <i data-lucide="file-text" class="w-3.5 h-3.5"></i>查看日志
+              </button>
+              <pre id="scheduler-log-content" class="hidden mt-2 p-3 bg-ink-900 border border-white/8 rounded-xl text-[11px] text-frost-300 font-mono max-h-[300px] overflow-y-auto whitespace-pre-wrap"></pre>
+            </div>
+          </section>
+
+          <!-- ═══ Goal Section ═══ -->
+          <section id="task-panel-goal" class="hidden">
+            <div class="flex items-center justify-between mb-4">
+              <h3 class="text-[16px] font-semibold text-frost-50 flex items-center gap-2">
+                <i data-lucide="target" class="w-4.5 h-4.5 text-accent-violet" style="width:18px;height:18px"></i>目标模式
+              </h3>
+              <div class="flex items-center gap-2">
+                <button id="btn-goal-stop" class="hidden px-3 py-1.5 rounded-lg bg-red-500/20 hover:bg-red-500/30 text-red-300 text-[12.5px] font-medium transition">
+                  <i data-lucide="square" class="w-3.5 h-3.5 inline"></i>停止
+                </button>
+                <button id="btn-goal-new" class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-brand-500 hover:bg-brand-400 text-white text-[12.5px] font-medium transition">
+                  <i data-lucide="plus" class="w-3.5 h-3.5"></i>创建目标
+                </button>
+              </div>
+            </div>
+            <!-- Goal status card -->
+            <div id="goal-status" class="settings-card p-5 mb-4">
+              <div class="text-frost-300 text-[12.5px] text-center p-4">暂无活跃目标</div>
+            </div>
+            <!-- Goal create form -->
+            <div id="goal-form" class="hidden settings-card p-5 space-y-4">
+              <div>
+                <label class="cfg-label">目标描述</label>
+                <textarea id="goal-objective" rows="3" placeholder="用自然语言描述你要达成的目标..." class="cfg-input mt-1 w-full resize-none"></textarea>
+              </div>
+              <div class="grid grid-cols-2 gap-3">
+                <div>
+                  <label class="cfg-label">时间预算（小时）</label>
+                  <input id="goal-budget" type="number" value="1" min="0.1" step="0.1" class="cfg-input mt-1">
+                </div>
+                <div>
+                  <label class="cfg-label">最大轮数</label>
+                  <input id="goal-max-turns" type="number" value="200" min="1" class="cfg-input mt-1">
+                </div>
+              </div>
+              <div>
+                <label class="cfg-label">完成提示词 <span class="text-frost-500 font-normal">（可选，达到条件时自动结束）</span></label>
+                <input id="goal-done-prompt" type="text" placeholder="当...时结束" class="cfg-input mt-1">
+              </div>
+              <div class="flex justify-end gap-2 pt-2">
+                <button id="btn-goal-cancel" class="px-4 py-2 rounded-lg bg-white/8 hover:bg-white/14 text-frost-200 text-[12.5px] font-medium transition">取消</button>
+                <button id="btn-goal-create" class="px-4 py-2 rounded-lg bg-gradient-to-br from-brand-400 to-brand-600 hover:brightness-110 text-white text-[12.5px] font-medium transition">创建并启动</button>
+              </div>
+            </div>
+          </section>
+
+          <!-- ═══ Hive Section ═══ -->
+          <section id="task-panel-hive" class="hidden">
+            <div class="flex items-center justify-between mb-4">
+              <h3 class="text-[16px] font-semibold text-frost-50 flex items-center gap-2">
+                <i data-lucide="hexagon" class="w-4.5 h-4.5 text-accent-pink" style="width:18px;height:18px"></i>Hive 协作集群
+              </h3>
+              <button id="btn-hive-new" class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-brand-500 hover:bg-brand-400 text-white text-[12.5px] font-medium transition">
+                <i data-lucide="plus" class="w-3.5 h-3.5"></i>创建集群
+              </button>
+            </div>
+            <div id="hive-list" class="space-y-3">
+              <div class="text-frost-300 text-[12.5px] p-4 text-center">加载中...</div>
+            </div>
+            <!-- Hive create form -->
+            <div id="hive-form" class="hidden settings-card p-5 mt-4 space-y-4">
+              <div>
+                <label class="cfg-label">集群名称</label>
+                <input id="hive-name" type="text" placeholder="短英文标识，如 opt-code" class="cfg-input mt-1">
+              </div>
+              <div class="grid grid-cols-2 gap-3">
+                <div>
+                  <label class="cfg-label">目标描述</label>
+                  <textarea id="hive-objective" rows="2" placeholder="协作目标..." class="cfg-input mt-1 w-full resize-none"></textarea>
+                </div>
+                <div>
+                  <label class="cfg-label">Worker 数量</label>
+                  <input id="hive-workers" type="number" value="3" min="1" max="5" class="cfg-input mt-1">
+                </div>
+              </div>
+              <div class="flex justify-end gap-2 pt-2">
+                <button id="btn-hive-cancel" class="px-4 py-2 rounded-lg bg-white/8 hover:bg-white/14 text-frost-200 text-[12.5px] font-medium transition">取消</button>
+                <button id="btn-hive-create" class="px-4 py-2 rounded-lg bg-gradient-to-br from-accent-violet to-accent-pink hover:brightness-110 text-white text-[12.5px] font-medium transition">生成启动命令</button>
+              </div>
+              <div id="hive-commands" class="hidden mt-3 p-3 bg-ink-900 border border-white/8 rounded-xl">
+                <div class="text-[11px] text-frost-400 mb-2 font-medium">启动命令（复制到终端执行）</div>
+                <pre id="hive-commands-text" class="text-[11px] text-brand-300 font-mono whitespace-pre-wrap"></pre>
+              </div>
+            </div>
+          </section>
+
         </div>
       </main>
 

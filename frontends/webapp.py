@@ -31,8 +31,57 @@ import subprocess, glob, ast
 from urllib.request import urlopen, Request
 from urllib.parse import quote, urlencode
 import urllib.error
+from slash_cmds import (build_update_prompt, build_autorun_prompt,
+                        build_morphling_prompt, build_goal_prompt,
+                        build_hive_prompt)
 
-WEB_DIR = os.path.join(HERE, 'web')
+WEB_DIR = os.path.join(HERE, 'web')  # default; overridden by --frontend codex
+
+# ───────── Slash-command registry ─────────
+_SLASH_CMDS = {
+    'update':   {'brief': '🔄 更新上游分支代码',    'builder': 'update'},
+    'morphling':{'brief': '🧬 吞噬/蒸馏外部项目',   'builder': 'morphling'},
+    'hive':     {'brief': '🐝 多Worker集群协作 → 任务面板', 'builder': 'hive'},
+    'scheduler':{'brief': '⏰ 计划任务管理 → 任务面板',     'builder': None},
+}
+
+_SLASH_BUILDERS = {
+    'update':    build_update_prompt,
+    'morphling': build_morphling_prompt,
+    'hive':      build_hive_prompt,
+}
+
+
+def _build_upstream_update_prompt(args_text: str = "") -> str:
+    """Generate a prompt that asks the agent to update from upstream branch."""
+    return (
+        "请执行上游分支代码更新操作，步骤如下：\n"
+        "1. 先提交本地所有未提交的更改（git add -A && git commit）\n"
+        "2. 执行 git fetch upstream 获取上游最新代码\n"
+        "3. 执行 git merge upstream/main 合并上游代码到当前分支\n"
+        "4. 如果有冲突，分析冲突内容并尝试自动解决（本地自定义文件优先保留）\n"
+        "5. 合并完成后给出更新摘要：新增/修改/删除了哪些文件\n"
+        "注意：不要 push 到 upstream（上游是只读的），只 merge 到本地。\n"
+        f"{args_text}"
+    )
+
+
+def _resolve_slash_cmd(text):
+    """If *text* starts with /<cmd>, resolve to the prompt-builder output.
+    Returns resolved text or None (meaning: passthrough as-is)."""
+    if not text or not text.startswith('/'):
+        return None
+    first_token = text.split(None, 1)[0].lstrip('/')
+    if first_token not in _SLASH_CMDS:
+        return None                       # unknown → treat as normal text
+    args_text = text.split(None, 1)[1] if ' ' in text else ''
+    # /update → custom upstream-merge flow
+    if first_token == 'update':
+        return _build_upstream_update_prompt(args_text)
+    builder = _SLASH_BUILDERS.get(first_token)
+    if builder:
+        return builder(args_text)
+    return None  # /scheduler etc. → no prompt replacement
 
 # ───────── Agent init ─────────
 _install_continue(GeneraticAgent)
@@ -179,6 +228,8 @@ class ChatWS(WebSocket):
                     text = (text + '\n\n' if text else '') + '\n'.join(f'[FILE] {p}' for p in files)
                 if not text and not images:
                     return
+                # ── slash-command interception ──
+                text = _resolve_slash_cmd(text) or text
                 dq = agent.put_task(text or '(image)', source='webapp', images=images)
                 threading.Thread(target=_pump_queue, args=(self, dq), daemon=True).start()
             elif t == 'abort':
@@ -402,65 +453,93 @@ def _extract_session_messages(path):
         return []
     pairs = _cc_pairs(content)
     out = []
-    for prompt_body, resp_body in pairs:
-        # ───── USER side ─────
-        user_parts = []
+
+    def _parse_prompt_parts(body):
+        """Extract user_text and tool_result parts from a Prompt body."""
+        parts = []
+        is_tool_result = False
         try:
-            msg = json.loads(prompt_body)
+            msg = json.loads(body)
             c = msg.get('content') if isinstance(msg, dict) else None
             if isinstance(c, str):
                 clean, _ = _split_user_from_sys(c)
-                if clean: user_parts.append({'type': 'user_text', 'content': clean})
+                if clean: parts.append({'type': 'user_text', 'content': clean})
             elif isinstance(c, list):
                 for blk in c:
                     if not isinstance(blk, dict): continue
                     t = blk.get('type')
                     if t == 'text':
                         clean, _ = _split_user_from_sys(blk.get('text', ''))
-                        if clean: user_parts.append({'type': 'user_text', 'content': clean})
+                        if clean: parts.append({'type': 'user_text', 'content': clean})
                     elif t == 'tool_result':
+                        is_tool_result = True
                         tc = blk.get('content', '')
                         if isinstance(tc, list):
                             tc = '\n'.join(b.get('text', '') for b in tc if isinstance(b, dict))
                         tc = str(tc).strip()
                         if tc:
-                            user_parts.append({
+                            parts.append({
                                 'type': 'tool_result',
                                 'tool_use_id': blk.get('tool_use_id', ''),
                                 'content': tc,
                             })
         except Exception:
-            raw = prompt_body.strip()
-            if raw: user_parts.append({'type': 'user_text', 'content': raw[:2000]})
-        if user_parts:
-            out.append({'role': 'user', 'parts': user_parts})
+            raw = body.strip()
+            if raw: parts.append({'type': 'user_text', 'content': raw[:2000]})
+        return parts, is_tool_result
 
-        # ───── ASSISTANT side ─────
-        asst_parts = []
+    def _parse_response_parts(body):
+        """Extract thinking/text/tool_use parts from a Response body."""
+        parts = []
         try:
-            blocks = ast.literal_eval(resp_body)
+            blocks = ast.literal_eval(body)
             if isinstance(blocks, list):
                 for blk in blocks:
                     if not isinstance(blk, dict): continue
                     t = blk.get('type')
                     if t == 'thinking':
                         tx = (blk.get('thinking') or '').strip()
-                        if tx: asst_parts.append({'type': 'thinking', 'content': tx})
+                        if tx: parts.append({'type': 'thinking', 'content': tx})
                     elif t == 'text':
                         tx = (blk.get('text') or '').strip()
-                        if tx: asst_parts.append({'type': 'text', 'content': tx})
+                        if tx: parts.append({'type': 'text', 'content': tx})
                     elif t == 'tool_use':
-                        asst_parts.append({
+                        parts.append({
                             'type': 'tool_use',
                             'name': blk.get('name', '?'),
                             'input': blk.get('input', {}),
                             'id': blk.get('id', ''),
                         })
         except Exception:
-            raw = resp_body.strip()
-            if raw: asst_parts.append({'type': 'text', 'content': raw[:2000]})
-        if asst_parts:
-            out.append({'role': 'assistant', 'parts': asst_parts})
+            raw = body.strip()
+            if raw: parts.append({'type': 'text', 'content': raw[:2000]})
+        return parts
+
+    for prompt_body, resp_body in pairs:
+        user_parts, is_tool_result = _parse_prompt_parts(prompt_body)
+        asst_parts = _parse_response_parts(resp_body)
+
+        if is_tool_result:
+            # ── Continuation round: merge into previous assistant bubble ──
+            # tool_result goes into previous user message (or skip if none)
+            if user_parts and out:
+                # Find last user message to append tool_result
+                for i in range(len(out) - 1, -1, -1):
+                    if out[i]['role'] == 'user':
+                        out[i]['parts'].extend(user_parts)
+                        break
+            # Assistant parts merge into previous assistant message
+            if asst_parts and out:
+                for i in range(len(out) - 1, -1, -1):
+                    if out[i]['role'] == 'assistant':
+                        out[i]['parts'].extend(asst_parts)
+                        break
+        else:
+            # ── New user turn: create fresh user + assistant messages ──
+            if user_parts:
+                out.append({'role': 'user', 'parts': user_parts})
+            if asst_parts:
+                out.append({'role': 'assistant', 'parts': asst_parts})
     return out
 
 
@@ -550,6 +629,213 @@ def _read_sop(name):
 
 # ───────── HTTP routes ─────────
 app = Bottle()
+
+
+@app.route('/api/slash-commands')
+def _slash_commands():
+    """Return available slash commands for Web UI autocomplete menu."""
+    return {'commands': _SLASH_CMDS}
+
+
+# ═══════════ Scheduler / Goal / Hive API ═══════════
+_SCHE_DIR = os.path.join(ROOT, 'sche_tasks')
+_SCHE_DONE = os.path.join(_SCHE_DIR, 'done')
+_GOAL_FILE = os.path.join(ROOT, 'temp', 'goal_state.json')
+_HIVE_BASE = os.path.join(ROOT, 'temp')
+
+def _json_files(directory):
+    """List *.json files in directory, return list of (stem, full_path)."""
+    if not os.path.isdir(directory):
+        return []
+    return [(f[:-5], os.path.join(directory, f))
+            for f in sorted(os.listdir(directory)) if f.endswith('.json')]
+
+# ── Scheduler ──
+@app.route('/api/scheduler/tasks')
+def _sche_tasks():
+    tasks = []
+    for name, path in _json_files(_SCHE_DIR):
+        try:
+            d = json.loads(open(path, encoding='utf-8').read())
+            d['name'] = name
+            # check if done today
+            done_marker = os.path.join(_SCHE_DONE, f'{time.strftime("%Y-%m-%d")}_{name}.md')
+            d['done_today'] = os.path.isfile(done_marker)
+            tasks.append(d)
+        except Exception:
+            tasks.append({'name': name, '_error': True})
+    return {'tasks': tasks}
+
+@app.route('/api/scheduler/tasks', method='POST')
+def _sche_create():
+    d = request.json
+    name = d.get('name', '').strip()
+    if not name:
+        response.status = 400; return {'error': 'name required'}
+    os.makedirs(_SCHE_DIR, exist_ok=True)
+    safe = re.sub(r'[^\w\-]', '_', name)
+    path = os.path.join(_SCHE_DIR, f'{safe}.json')
+    obj = {k: d[k] for k in ('schedule', 'repeat', 'enabled', 'prompt', 'max_delay_hours') if k in d}
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(obj, f, ensure_ascii=False, indent=2)
+    return {'ok': True, 'name': safe}
+
+@app.route('/api/scheduler/tasks/<name>', method='PUT')
+def _sche_update(name):
+    path = os.path.join(_SCHE_DIR, f'{name}.json')
+    if not os.path.isfile(path):
+        response.status = 404; return {'error': 'not found'}
+    d = request.json
+    obj = {k: d[k] for k in ('schedule', 'repeat', 'enabled', 'prompt', 'max_delay_hours') if k in d}
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(obj, f, ensure_ascii=False, indent=2)
+    return {'ok': True}
+
+@app.route('/api/scheduler/tasks/<name>', method='DELETE')
+def _sche_delete(name):
+    path = os.path.join(_SCHE_DIR, f'{name}.json')
+    if os.path.isfile(path):
+        os.remove(path)
+        return {'ok': True}
+    response.status = 404; return {'error': 'not found'}
+
+@app.route('/api/scheduler/reports')
+def _sche_done():
+    os.makedirs(_SCHE_DONE, exist_ok=True)
+    reports = []
+    for f in sorted(os.listdir(_SCHE_DONE), reverse=True):
+        if f.endswith('.md'):
+            fp = os.path.join(_SCHE_DONE, f)
+            size = os.path.getsize(fp)
+            reports.append({'file': f, 'size': size, 'time': os.path.getmtime(fp)})
+    return {'reports': reports[:50]}
+
+@app.route('/api/scheduler/report/<fname>')
+def _sche_done_read(fname):
+    fp = os.path.join(_SCHE_DONE, fname)
+    if not os.path.isfile(fp):
+        response.status = 404; return {'error': 'not found'}
+    with open(fp, encoding='utf-8') as f:
+        return {'content': f.read()}
+
+@app.route('/api/scheduler/log')
+def _sche_log():
+    log_path = os.path.join(_SCHE_DIR, 'scheduler.log')
+    if not os.path.isfile(log_path):
+        return {'log': ''}
+    with open(log_path, encoding='utf-8', errors='replace') as f:
+        lines = f.readlines()
+    return {'log': ''.join(lines[-100:])}
+
+# ── Goal ──
+@app.route('/api/goal/state')
+def _goal_state():
+    if not os.path.isfile(_GOAL_FILE):
+        return {'state': None}
+    try:
+        d = json.loads(open(_GOAL_FILE, encoding='utf-8').read())
+        return {'state': d}
+    except Exception:
+        return {'state': None}
+
+@app.route('/api/goal/start', method='POST')
+def _goal_start():
+    d = request.json
+    objective = d.get('objective', '').strip()
+    if not objective:
+        response.status = 400; return {'error': 'objective required'}
+    budget = int(d.get('budget_seconds', 10800))
+    max_turns = int(d.get('max_turns', 200))
+    import time as _t
+    state = {
+        'objective': objective,
+        'budget_seconds': budget,
+        'start_time': _t.time(),
+        'turns_used': 0,
+        'max_turns': max_turns,
+        'status': 'running',
+        'done_prompt': d.get('done_prompt', '')
+    }
+    os.makedirs(os.path.dirname(_GOAL_FILE), exist_ok=True)
+    with open(_GOAL_FILE, 'w', encoding='utf-8') as f:
+        json.dump(state, f, ensure_ascii=False, indent=2)
+    cmd = f'set GOAL_STATE=temp\\goal_state.json && start /b python agentmain.py --reflect reflect/goal_mode.py'
+    return {'ok': True, 'command': cmd}
+
+@app.route('/api/goal/stop', method='POST')
+def _goal_stop():
+    if not os.path.isfile(_GOAL_FILE):
+        response.status = 404; return {'error': 'no active goal'}
+    d = json.loads(open(_GOAL_FILE, encoding='utf-8').read())
+    d['status'] = 'stopped'
+    with open(_GOAL_FILE, 'w', encoding='utf-8') as f:
+        json.dump(d, f, ensure_ascii=False, indent=2)
+    return {'ok': True}
+
+# ── Hive ──
+@app.route('/api/hive/sessions')
+def _hive_sessions():
+    sessions = []
+    temp_dir = _HIVE_BASE
+    if not os.path.isdir(temp_dir):
+        return {'sessions': []}
+    for d in sorted(os.listdir(temp_dir)):
+        if d.startswith('hive_'):
+            full = os.path.join(temp_dir, d)
+            if os.path.isdir(full):
+                # check for goal_state.json inside
+                gs = os.path.join(full, 'goal_state.json')
+                state = None
+                if os.path.isfile(gs):
+                    try:
+                        state = json.loads(open(gs, encoding='utf-8').read())
+                    except Exception:
+                        pass
+                sessions.append({'name': d, 'state': state})
+    return {'sessions': sessions}
+
+@app.route('/api/hive/create', method='POST')
+def _hive_create():
+    d = request.json
+    objective = d.get('objective', '').strip()
+    if not objective:
+        response.status = 400; return {'error': 'objective required'}
+    short = re.sub(r'[^\w]', '_', objective[:20]).strip('_')
+    hive_dir = os.path.join(_HIVE_BASE, f'hive_{short}')
+    os.makedirs(hive_dir, exist_ok=True)
+    workers = int(d.get('workers', 3))
+    budget = int(d.get('budget_seconds', 14400))
+    import time as _t
+    state = {
+        'objective': objective,
+        'budget_seconds': budget,
+        'start_time': _t.time(),
+        'turns_used': 0,
+        'max_turns': 300,
+        'status': 'running',
+        'done_prompt': d.get('done_prompt', '')
+    }
+    gs_path = os.path.join(hive_dir, 'goal_state.json')
+    with open(gs_path, 'w', encoding='utf-8') as f:
+        json.dump(state, f, ensure_ascii=False, indent=2)
+    port = d.get('port', 18600)
+    key = d.get('key', short)
+    cmds = {
+        'bbs': f'start /b python assets/agent_bbs.py --cwd temp/hive_{short} --port {port} --key {key}',
+        'master': f'set GOAL_STATE=temp/hive_{short}/goal_state.json && start /b python agentmain.py --reflect reflect/goal_mode.py',
+        'worker': f'start /b python agentmain.py --reflect reflect/agent_team_worker.py --base_url http://127.0.0.1:{port} --board_key {key} --name hive-worker-N'
+    }
+    return {'ok': True, 'dir': f'temp/hive_{short}', 'workers': workers, 'commands': cmds}
+
+@app.route('/api/hive/<name>/status')
+def _hive_status(name):
+    gs = os.path.join(_HIVE_BASE, name, 'goal_state.json')
+    if not os.path.isfile(gs):
+        response.status = 404; return {'error': 'not found'}
+    try:
+        return {'state': json.loads(open(gs, encoding='utf-8').read())}
+    except Exception:
+        return {'state': None}
 
 
 @app.route('/')
@@ -1225,6 +1511,152 @@ class _ThreadedWSGIServer(bottle.ServerAdapter):
         srv.serve_forever()
 
 
+# ═══════════ MCP Management API ═══════════
+_MCP_CFG = os.path.join(ROOT, 'config', 'mcp_servers.json')
+
+def _get_mcp_mgr():
+    """Get the global MCPManager instance."""
+    try:
+        from mcp_client import get_global_manager
+        return get_global_manager()
+    except Exception:
+        return None
+
+@app.route('/api/mcp/servers')
+def _mcp_servers():
+    """List all MCP servers with status and tools."""
+    try:
+        cfg = {}
+        if os.path.isfile(_MCP_CFG):
+            try: cfg = json.loads(open(_MCP_CFG, encoding='utf-8').read())
+            except Exception: pass
+        mgr = _get_mcp_mgr()
+        servers = []
+        for name, info in cfg.get('mcpServers', {}).items():
+            stype = info.get('type', 'stdio')
+            entry = {'name': name, 'type': stype}
+            if stype == 'streamable-http':
+                entry['url'] = info.get('url', '')
+            if mgr and name in mgr.clients:
+                client = mgr.clients[name]
+                entry['connected'] = True
+                entry['enabled'] = name not in mgr.disabled
+                def _tool_info(t):
+                    if isinstance(t, dict):
+                        return {'name': t.get('name', ''), 'description': (t.get('description') or '')[:100]}
+                    return {'name': t.name, 'description': (t.description or '')[:100]}
+                entry['tools'] = [_tool_info(t) for t in client.tools]
+            else:
+                entry['connected'] = False
+                entry['enabled'] = info.get('enabled', True)
+                entry['tools'] = []
+            servers.append(entry)
+        return _json({'servers': servers})
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return _json({'error': str(e)}, 500)
+
+@app.route('/api/mcp/servers/<name>/reload', method='POST')
+def _mcp_reload(name):
+    """Reload a specific MCP server connection."""
+    mgr = _get_mcp_mgr()
+    if not mgr:
+        response.status = 503; return {'error': 'MCP manager not initialized'}
+    try:
+        cfg = json.loads(open(_MCP_CFG, encoding='utf-8').read())
+        servers = cfg.get('mcpServers', {})
+        if name not in servers:
+            response.status = 404; return {'error': f'Server {name} not found in config'}
+        if name in mgr.clients:
+            mgr.clients[name].close()
+            del mgr.clients[name]
+        mgr.add_server(name, servers[name])
+        mgr.clients[name].connect()
+        mgr.clients[name].discover_tools()
+        mgr._rebuild_index()
+        return {'ok': True, 'tools': len(mgr.clients[name].tools)}
+    except Exception as e:
+        response.status = 500; return {'error': str(e)}
+
+@app.route('/api/mcp/servers/<name>', method='DELETE')
+def _mcp_delete(name):
+    """Remove an MCP server from config and disconnect."""
+    mgr = _get_mcp_mgr()
+    if mgr and name in mgr.clients:
+        mgr.clients[name].close()
+        del mgr.clients[name]
+        mgr._rebuild_index()
+    cfg = {}
+    if os.path.isfile(_MCP_CFG):
+        cfg = json.loads(open(_MCP_CFG, encoding='utf-8').read())
+    if name in cfg.get('mcpServers', {}):
+        del cfg['mcpServers'][name]
+        with open(_MCP_CFG, 'w', encoding='utf-8') as f:
+            json.dump(cfg, f, ensure_ascii=False, indent=2)
+    return {'ok': True}
+
+@app.route('/api/mcp/servers/<name>/toggle', method='POST')
+def _mcp_toggle(name):
+    """Toggle enabled/disabled state of an MCP server."""
+    mgr = _get_mcp_mgr()
+    if not mgr:
+        response.status = 503; return {'error': 'MCP manager not initialized'}
+    try:
+        enabled = mgr.toggle_server(name)
+        return {'ok': True, 'enabled': enabled}
+    except ValueError as e:
+        response.status = 404; return {'error': str(e)}
+    except Exception as e:
+        response.status = 500; return {'error': str(e)}
+
+@app.route('/api/mcp/servers', method='POST')
+def _mcp_create():
+    """Add a new MCP server to config."""
+    d = request.json
+    name = d.get('name', '').strip()
+    if not name:
+        response.status = 400; return {'error': 'name required'}
+    cfg = {}
+    if os.path.isfile(_MCP_CFG):
+        cfg = json.loads(open(_MCP_CFG, encoding='utf-8').read())
+    cfg.setdefault('mcpServers', {})[name] = d.get('config', {})
+    os.makedirs(os.path.dirname(_MCP_CFG), exist_ok=True)
+    with open(_MCP_CFG, 'w', encoding='utf-8') as f:
+        json.dump(cfg, f, ensure_ascii=False, indent=2)
+    return {'ok': True, 'name': name}
+
+@app.route('/api/mcp/test', method='POST')
+def _mcp_test():
+    """Test call an MCP tool."""
+    d = request.json
+    server = d.get('server', '')
+    tool = d.get('tool', '')
+    arguments = d.get('arguments', {})
+    if not server or not tool:
+        response.status = 400; return {'error': 'server and tool required'}
+    mgr = _get_mcp_mgr()
+    if not mgr:
+        response.status = 503; return {'error': 'MCP manager not initialized'}
+    try:
+        result = mgr.call_tool(server, tool, arguments)
+        return {'ok': True, 'result': result}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+
+@app.route('/api/mcp/reload', method='POST')
+def _mcp_reload_all():
+    """Reload all MCP servers from config."""
+    try:
+        from agentmain import init_mcp_tools
+        mgr = _get_mcp_mgr()
+        if mgr:
+            mgr.close_all()
+        init_mcp_tools()
+        return {'ok': True}
+    except Exception as e:
+        response.status = 500; return {'error': str(e)}
+
+
 def run_server(http_port, ws_port):
     os.environ['WEBAPP_WS_PORT'] = str(ws_port)
     ws_server = WebSocketServer('127.0.0.1', ws_port, ChatWS)
@@ -1239,7 +1671,13 @@ if __name__ == '__main__':
     ap = argparse.ArgumentParser()
     ap.add_argument('--http-port', type=int, default=0, help='0 = auto pick')
     ap.add_argument('--ws-port', type=int, default=0, help='0 = auto pick')
+    ap.add_argument('--frontend', default='web', choices=['web', 'codex'],
+                    help='Frontend to serve: web (default) or codex')
     args = ap.parse_args()
+    # ── Override WEB_DIR for codex frontend ──
+    if args.frontend == 'codex':
+        WEB_DIR = os.path.join(HERE, 'codex')
+        print(f'[webapp] Using codex frontend: {WEB_DIR}')
     http_port = args.http_port or find_free_port(18520)
     ws_port = args.ws_port or find_free_port(http_port + 1)
     run_server(http_port, ws_port)

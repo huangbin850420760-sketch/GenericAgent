@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GA Codex</title>
+  <link rel="stylesheet" href="static/codex.css">
+  <style>
+    /* Inline SVG icon helper - prevents FOUC */
+    .icon{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px}
+    .icon svg{width:100%;height:100%;fill:currentColor}
+  </style>
+</head>
+<body>
+<div id="app">
+
+  <!-- ═══ Sidebar ═══ -->
+  <aside id="sidebar">
+    <div class="sidebar-header">
+      <div class="logo">
+        <svg viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+        GA Codex
+      </div>
+      <button class="sidebar-toggle" onclick="toggleSidebar()" title="收起侧边栏">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>
+      </button>
+    </div>
+
+    <div class="sidebar-search">
+      <input type="text" id="search-input" placeholder="搜索对话、技能..." oninput="handleSearch(this.value)">
+    </div>
+
+    <!-- Navigation -->
+    <nav class="sidebar-nav">
+      <button class="nav-item active" data-view="chat" onclick="switchView('chat')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        对话
+      </button>
+      <button class="nav-item" data-view="skills" onclick="switchView('skills')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+        技能
+        <span class="badge" id="skills-count">0</span>
+      </button>
+      <button class="nav-item" data-view="mcp" onclick="switchView('mcp')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><circle cx="6" cy="6" r="1"/><circle cx="6" cy="18" r="1"/></svg>
+        插件
+      </button>
+      <button class="nav-item" data-view="scheduler" onclick="switchView('scheduler')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        自动化
+      </button>
+    </nav>
+
+    <div class="sidebar-divider"></div>
+
+    <div class="sidebar-section-title">项目</div>
+
+    <div class="session-list" id="session-list">
+      <!-- Dynamically populated -->
+      <div class="session-item" style="justify-content:center;color:var(--text-tertiary);font-size:12px;cursor:default;">
+        加载中...
+      </div>
+    </div>
+
+    <div class="sidebar-footer">
+      <button class="new-chat-btn" onclick="newChat()">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        新对话
+      </button>
+    </div>
+  </aside>
+
+  <!-- ═══ Main Panel ═══ -->
+  <main id="main">
+    <!-- Header bar -->
+    <div class="main-header">
+      <button class="sidebar-open-btn" onclick="toggleSidebar()" title="打开侧边栏">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+      </button>
+
+      <div class="model-selector" onclick="toggleModelDropdown()" id="model-selector">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z"/><path d="M12 6v6l4 2"/></svg>
+        <span id="current-model">加载中...</span>
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+      </div>
+
+      <div class="header-spacer"></div>
+
+      <button class="header-btn" onclick="toggleSettings()" title="设置">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      </button>
+    </div>
+
+    <!-- ═══ Chat View ═══ -->
+    <div class="chat-container" id="chat-container">
+      <!-- Empty state (shown when no active conversation) -->
+      <div class="empty-state" id="empty-state">
+        <svg class="welcome-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+        </svg>
+        <h2>有什么可以帮你的？</h2>
+        <p>GA Codex — 智能代理平台，支持多模型、MCP工具、自动化任务</p>
+
+        <div class="suggestion-cards">
+          <div class="suggestion-card" onclick="useSuggestion('帮我分析当前项目结构')">
+            <div class="card-icon">📁</div>
+            <div class="card-title">分析项目</div>
+            <div class="card-desc">了解当前目录结构和文件</div>
+          </div>
+          <div class="suggestion-card" onclick="useSuggestion('查看可用的技能列表')">
+            <div class="card-icon">⭐</div>
+            <div class="card-title">查看技能</div>
+            <div class="card-desc">浏览所有已安装的技能</div>
+          </div>
+          <div class="suggestion-card" onclick="useSuggestion('帮我创建一个自动化任务')">
+            <div class="card-icon">⏰</div>
+            <div class="card-title">自动化任务</div>
+            <div class="card-desc">设置定时或触发式任务</div>
+          </div>
+          <div class="suggestion-card" onclick="useSuggestion('管理MCP插件服务器')">
+            <div class="card-icon">🔌</div>
+            <div class="card-title">管理插件</div>
+            <div class="card-desc">配置MCP工具服务器</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Messages area (hidden until conversation starts) -->
+      <div class="messages hidden" id="messages"></div>
+    </div>
+
+    <!-- ═══ Input Area ═══ -->
+    <div class="input-area">
+      <div class="input-wrapper">
+        <!-- File preview (hidden by default) -->
+        <div class="file-preview hidden" id="file-preview"></div>
+
+        <div class="input-box">
+          <!-- Attach button -->
+          <button class="input-btn" onclick="document.getElementById('file-input').click()" title="添加附件">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          </button>
+          <input type="file" id="file-input" style="display:none" multiple onchange="handleFileSelect(this.files)">
+
+          <!-- Text input -->
+          <textarea id="user-input" rows="1" placeholder="随心输入..." 
+            onkeydown="handleInputKeydown(event)" oninput="autoResize(this)"></textarea>
+
+          <!-- Right side actions -->
+          <div class="input-actions">
+            <select class="permission-select" id="permission-select" title="默认权限">
+              <option value="suggest">建议模式</option>
+              <option value="auto-edit">自动编辑</option>
+              <option value="full-auto">全自动</option>
+            </select>
+            <button class="input-btn send-btn" id="send-btn" onclick="sendMessage()" title="发送 (Enter)">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <div class="input-hint">按 Enter 发送 · Shift+Enter 换行 · / 斜杠命令</div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- ═══ Settings Overlay ═══ -->
+<div id="settings-overlay" onclick="if(event.target===this)toggleSettings()">
+  <div class="settings-panel">
+    <div class="settings-header">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+      <h2>设置</h2>
+      <button class="settings-close" onclick="toggleSettings()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+
+    <div class="settings-body">
+      <!-- Settings navigation -->
+      <nav class="settings-nav" id="settings-nav">
+        <div class="settings-nav-item active" data-section="appearance" onclick="switchSettingsSection('appearance')">🎨 外观</div>
+        <div class="settings-nav-item" data-section="models" onclick="switchSettingsSection('models')">🤖 模型配置</div>
+        <div class="settings-nav-item" data-section="mcp" onclick="switchSettingsSection('mcp')">🔌 MCP服务器</div>
+        <div class="settings-nav-item" data-section="scheduler" onclick="switchSettingsSection('scheduler')">⏰ 调度任务</div>
+        <div class="settings-nav-item" data-section="sophub" onclick="switchSettingsSection('sophub')">🌐 社区</div>
+        <div class="settings-nav-item" data-section="shortcuts" onclick="switchSettingsSection('shortcuts')">⌨️ 快捷键</div>
+        <div class="settings-nav-item" data-section="about" onclick="switchSettingsSection('about')">ℹ️ 关于</div>
+      </nav>
+
+      <!-- Settings content -->
+      <div class="settings-content" id="settings-content">
+        <!-- Appearance Section (default) -->
+        <div class="settings-section" id="settings-appearance">
+          <div class="setting-group">
+            <h3>主题</h3>
+            <div class="theme-cards">
+              <div class="theme-card" data-theme-value="light" onclick="setTheme('light')">
+                <div class="theme-preview" style="background:linear-gradient(135deg,#fff 50%,#f0f0f0 50%)"></div>
+                <div class="theme-name">浅色</div>
+              </div>
+              <div class="theme-card active" data-theme-value="dark" onclick="setTheme('dark')">
+                <div class="theme-preview" style="background:linear-gradient(135deg,#2a2a2a 50%,#1a1a1a 50%)"></div>
+                <div class="theme-name">深色</div>
+              </div>
+              <div class="theme-card" data-theme-value="system" onclick="setTheme('system')">
+                <div class="theme-preview" style="background:linear-gradient(135deg,#fff 50%,#1a1a1a 50%)"></div>
+                <div class="theme-name">跟随系统</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="setting-group">
+            <h3>界面</h3>
+            <div class="setting-row">
+              <div>
+                <div class="setting-label">紧凑模式</div>
+                <div class="setting-desc">减少间距，显示更多内容</div>
+              </div>
+              <label class="toggle">
+                <input type="checkbox" id="compact-mode" onchange="toggleCompact(this.checked)">
+                <span class="slider"></span>
+              </label>
+            </div>
+            <div class="setting-row">
+              <div>
+                <div class="setting-label">显示行号</div>
+                <div class="setting-desc">代码块中显示行号</div>
+              </div>
+              <label class="toggle">
+                <input type="checkbox" id="show-line-numbers" checked>
+                <span class="slider"></span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <!-- Models Section -->
+        <div class="settings-section hidden" id="settings-models">
+          <div class="setting-group">
+            <h3>模型配置</h3>
+            <div id="model-config-content">
+              <p style="color:var(--text-secondary);font-size:13px">加载配置中...</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- MCP Section -->
+        <div class="settings-section hidden" id="settings-mcp">
+          <div class="setting-group">
+            <h3>MCP 服务器</h3>
+            <div id="mcp-server-list">
+              <p style="color:var(--text-secondary);font-size:13px">加载服务器列表...</p>
+            </div>
+          </div>
+          <div class="setting-group">
+            <h3>添加服务器</h3>
+            <div style="display:flex;gap:8px;margin-bottom:8px">
+              <input type="text" id="mcp-add-name" placeholder="名称" style="flex:1;padding:8px;background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text-primary);outline:none">
+              <input type="text" id="mcp-add-url" placeholder="URL" style="flex:2;padding:8px;background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text-primary);outline:none">
+            </div>
+            <div style="display:flex;gap:8px;align-items:center">
+              <select id="mcp-add-type" style="padding:8px;background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text-primary);outline:none">
+                <option value="http">HTTP</option>
+                <option value="sse">SSE</option>
+                <option value="stdio">Stdio</option>
+              </select>
+              <button onclick="addMcpServer()" style="padding:8px 16px;background:var(--accent);color:#fff;border:none;border-radius:var(--radius-sm);cursor:pointer;font-size:13px">添加</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Scheduler Section -->
+        <div class="settings-section hidden" id="settings-scheduler">
+          <div class="setting-group">
+            <h3>调度任务</h3>
+            <div id="scheduler-task-list">
+              <p style="color:var(--text-secondary);font-size:13px">加载任务列表...</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Sophub Section -->
+        <div class="settings-section hidden" id="settings-sophub">
+          <div class="setting-group">
+            <h3>社区 SOP 共享</h3>
+            <div style="display:flex;gap:8px;margin-bottom:16px">
+              <input type="text" id="sophub-search-input" placeholder="搜索 SOP..." style="flex:1;padding:8px;background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text-primary);outline:none">
+              <button onclick="searchSophub()" style="padding:8px 16px;background:var(--accent);color:#fff;border:none;border-radius:var(--radius-sm);cursor:pointer;font-size:13px">搜索</button>
+            </div>
+            <div id="sophub-results"></div>
+          </div>
+        </div>
+
+        <!-- Shortcuts Section -->
+        <div class="settings-section hidden" id="settings-shortcuts">
+          <div class="setting-group">
+            <h3>键盘快捷键</h3>
+            <div class="setting-row"><div class="setting-label">新建对话</div><code style="color:var(--accent)">Ctrl+Shift+N</code></div>
+            <div class="setting-row"><div class="setting-label">发送消息</div><code style="color:var(--accent)">Enter</code></div>
+            <div class="setting-row"><div class="setting-label">换行</div><code style="color:var(--accent)">Shift+Enter</code></div>
+            <div class="setting-row"><div class="setting-label">切换侧边栏</div><code style="color:var(--accent)">Ctrl+B</code></div>
+            <div class="setting-row"><div class="setting-label">打开设置</div><code style="color:var(--accent)">Ctrl+,</code></div>
+            <div class="setting-row"><div class="setting-label">搜索</div><code style="color:var(--accent)">Ctrl+K</code></div>
+            <div class="setting-row"><div class="setting-label">斜杠命令</div><code style="color:var(--accent)">/</code></div>
+          </div>
+        </div>
+
+        <!-- About Section -->
+        <div class="settings-section hidden" id="settings-about">
+          <div class="setting-group">
+            <h3>GA Codex</h3>
+            <p style="color:var(--text-secondary);font-size:13px;line-height:1.8">
+              基于 GenericAgent 的 Codex 风格前端<br>
+              支持多模型、MCP工具、自动化任务<br>
+              <span style="color:var(--text-tertiary)">Version 1.0.0</span>
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Toast container -->
+<div class="toast-container" id="toast-container"></div>
+
+<!-- Scripts -->
+<script src="static/api.js"></script>
+<script src="static/codex.js"></script>
+</body>
+</html>

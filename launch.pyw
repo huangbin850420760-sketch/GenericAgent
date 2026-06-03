@@ -163,7 +163,21 @@ if __name__ == '__main__':
         screen_width = get_screen_width()
         x_pos = screen_width - WINDOW_WIDTH - RIGHT_PADDING
     else: x_pos = 100
-    time.sleep(2) 
+    # Wait for webapp to be ready (poll HTTP, fallback to sleep)
+    try:
+        import urllib.request
+        for _ in range(30):  # up to 15s
+            try:
+                urllib.request.urlopen(f'http://localhost:{port}/', timeout=1)
+                print(f'[Launch] Webapp ready on port {port}')
+                break
+            except Exception:
+                time.sleep(0.5)
+        else:
+            print(f'[Launch] WARNING: webapp not responding on port {port} after 15s, opening anyway')
+    except Exception as e:
+        print(f'[Launch] WARNING: poll failed ({e}), falling back to sleep')
+        time.sleep(3)
     window = webview.create_window(
         title='GenericAgent', url=f'http://localhost:{port}',
         width=WINDOW_WIDTH, height=WINDOW_HEIGHT, x=x_pos, y=TOP_PADDING,

@@ -50,6 +50,8 @@
     lastReplyTime: 0,
     autonomousEnabled: false,
     pendingAssistant: null,
+    viewingSessionPath: null,   // path of session being viewed (read-only)
+    savedActiveHTML: null,      // saved innerHTML of active conversation
     skills: { tools: [], sops: [] },
     currentSessionPath: null,
   };
@@ -64,11 +66,15 @@
     },
     onclose: () => setStatus('连接断开，3秒后重连...', false, true),
     on_status: (m) => updateStatus(m.payload),
-    on_stream: (m) => appendAssistantStream(m.full),
+    on_stream: (m) => {
+      if (state.viewingSessionPath) returnToActive();
+      appendAssistantStream(m.full);
+    },
     on_done: (m) => { finalizeAssistant(m.payload); setRunning(false); refreshSessions(); },
     on_info: (m) => showToast(m.payload, 'info'),
     on_error: (m) => { showToast(m.payload, 'error'); setRunning(false); },
     on_auto_user: (m) => {
+      if (state.viewingSessionPath) returnToActive();
       // Autonomous task fired (idle-monitor or manual). Show a user bubble + prep assistant area.
       addUserMessage(m.payload || '🤖 (自主触发)', [], []);
       addAssistantPlaceholder();
@@ -94,7 +100,7 @@
     setRunning(!!p.running);
     autonomousToggle.checked = state.autonomousEnabled;
     document.body.classList.toggle('autonomous-on', state.autonomousEnabled);
-    autonomousHintText.textContent = state.autonomousEnabled ? '30分钟空闲后自动触发' : '已停止';
+    if (autonomousHintText) autonomousHintText.textContent = state.autonomousEnabled ? '30分钟空闲后自动触发' : '已停止';
   }
   function setRunning(r) {
     state.running = r;
@@ -144,30 +150,33 @@
   document.addEventListener('click', () => llmDropdown.classList.remove('open'));
 
   /* ═════ Tabs ═════ */
-  document.querySelectorAll('#nav-tabs .tab-btn').forEach(btn => {
-    btn.addEventListener('click', () => switchTab(btn.dataset.tab));
-  });
-  $('rail-skills')?.addEventListener('click', () => {
-    document.body.classList.remove('sidebar-collapsed');
-    switchTab('skills');
+  // Top tab bar buttons (.tab-btn) + bottom action buttons ([data-tab])
+  document.querySelectorAll('#sidebar .tab-btn, #sidebar [data-tab]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.body.classList.remove('sidebar-collapsed');
+      switchTab(btn.dataset.tab);
+    });
   });
 
   function switchTab(tab) {
     state.tab = tab;
-    document.querySelectorAll('#nav-tabs .tab-btn').forEach(b =>
+    // Sync sidebar nav buttons
+    document.querySelectorAll('#sidebar .tab-btn, #sidebar [data-tab]').forEach(b =>
       b.classList.toggle('active', b.dataset.tab === tab));
-    $('sidebar-chat').classList.toggle('hidden', tab !== 'chat');
-    $('sidebar-chat').classList.toggle('flex', tab === 'chat');
-    $('sidebar-skills').classList.toggle('hidden', tab !== 'skills');
-    $('sidebar-skills').classList.toggle('flex', tab === 'skills');
-    $('sidebar-settings').classList.toggle('hidden', tab !== 'settings');
-    $('sidebar-settings').classList.toggle('flex', tab === 'settings');
+    // Sync collapsed rail buttons
+    document.querySelectorAll('#sidebar-rail [data-tab]').forEach(b =>
+      b.classList.toggle('active', b.dataset.tab === tab));
+    // Toggle right-side views only
     $('view-chat').classList.toggle('hidden', tab !== 'chat');
     $('view-chat').classList.toggle('flex', tab === 'chat');
     $('view-skills').classList.toggle('hidden', tab !== 'skills');
     $('view-settings').classList.toggle('hidden', tab !== 'settings');
+    $('view-tasks').classList.toggle('hidden', tab !== 'tasks');
+    $('view-mcp').classList.toggle('hidden', tab !== 'mcp');
     if (tab === 'skills') loadSkills();
     if (tab === 'settings') loadConfig();
+    if (tab === 'tasks') initTasksView();
+    if (tab === 'mcp') loadMCPPanel();
   }
   switchTab('chat');
 
@@ -193,17 +202,17 @@
       sessionsListEl.innerHTML = `<div class="text-frost-400 text-xs p-2 text-center">${msg}</div>`;
       return;
     }
-    sessionsListEl.innerHTML = sessions.map(s => {
+    const shown = sessions.slice(0, 10);
+    sessionsListEl.innerHTML = shown.map(s => {
       const title = s.title || (s.preview || '(无预览)').replace(/\n/g, ' ');
-      const displayTitle = escapeHTML(title.slice(0, 80));
+      const displayTitle = escapeHTML(title.slice(0, 50));
       const rel = relTime(s.mtime);
       const active = state.currentSessionPath === s.path ? 'active' : '';
       const hint = s.title ? escapeAttr(s.preview || '') : escapeAttr(title);
       return `<div class="session-item ${active}" data-path="${escapeAttr(s.path)}" title="${hint}">
-        <div class="session-title">${displayTitle}</div>
-        <div class="session-meta">
-          <span>${rel}</span>
-          <span class="rounds">${s.rounds}轮</span>
+        <div class="session-row">
+          <span class="session-title">${displayTitle}</span>
+          <span class="session-time">${rel}</span>
         </div>
         <div class="session-actions">
           <button class="session-action-btn" data-act="rename" title="重命名">
@@ -219,7 +228,7 @@
     sessionsListEl.querySelectorAll('.session-item').forEach(el => {
       el.addEventListener('click', (e) => {
         if (e.target.closest('.session-actions')) return;
-        restoreAndShow(el.dataset.path);
+        viewSession(el.dataset.path);
       });
       const renameBtn = el.querySelector('[data-act="rename"]');
       const deleteBtn = el.querySelector('[data-act="delete"]');
@@ -242,11 +251,64 @@
     });
   }
 
+  async function viewSession(path) {
+    // Switch to chat tab if not already there
+    if (state.tab !== 'chat') switchTab('chat');
+    // If already viewing another session or same, save nothing (already saved)
+    if (!state.viewingSessionPath) {
+      // Save current active conversation HTML before switching
+      state.savedActiveHTML = messagesEl.innerHTML;
+    }
+    state.viewingSessionPath = path;
+    try {
+      const r = await API.getSessionHistory(path);
+      const messages = r.messages || [];
+      // Derive title
+      const firstUser = messages.find(m => m.role === 'user');
+      const preview = firstUser
+        ? String((firstUser.parts || []).filter(p => p.type === 'user_text').map(p => p.content).join(' ') || '').slice(0, 48)
+        : '';
+      const fname = path.split(/[\\/]/).pop().replace(/\.(json|txt)$/i, '');
+      const title = preview || fname || '历史会话';
+      const titleEl = $('conversation-title');
+      if (titleEl) titleEl.textContent = '📖 ' + title;
+      renderSessionHistory(messages);
+      // Insert action bar at top of messages
+      const bar = document.createElement('div');
+      bar.id = 'session-view-bar';
+      bar.className = 'flex items-center gap-2 p-3 mb-2 bg-accent-violet/10 border border-accent-violet/20 rounded-xl text-sm';
+      bar.innerHTML = `
+        <span class="text-frost-300 flex-1">📖 只读查看历史会话</span>
+        <button id="btn-return-active" class="px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-frost-200 transition">← 返回当前对话</button>
+        <button id="btn-restore-session" class="px-3 py-1.5 rounded-lg bg-accent-violet hover:bg-accent-violet/80 text-white transition">恢复此会话</button>
+      `;
+      messagesEl.prepend(bar);
+      $('btn-return-active').addEventListener('click', returnToActive);
+      $('btn-restore-session').addEventListener('click', () => restoreAndShow(path));
+    } catch (e) {
+      showToast('加载历史失败: ' + e.message, 'error');
+    }
+  }
+
+  function returnToActive() {
+    state.viewingSessionPath = null;
+    if (state.savedActiveHTML !== null) {
+      messagesEl.innerHTML = state.savedActiveHTML;
+      state.savedActiveHTML = null;
+    } else {
+      clearMessages('');
+    }
+    const titleEl = $('conversation-title');
+    if (titleEl) titleEl.textContent = '新对话';
+  }
+
   async function restoreAndShow(path) {
     if (!confirm('恢复此会话？当前上下文将被清空。')) return;
     try {
       const r = await API.restoreSession(path);
       state.currentSessionPath = path;
+      state.viewingSessionPath = null;
+      state.savedActiveHTML = null;
       // Derive title from the first user message (fallback: filename)
       const firstUser = (r.history || []).find(m => m.role === 'user');
       const preview = firstUser ? String(firstUser.content || '').slice(0, 48) : '';
@@ -336,7 +398,36 @@
   function buildAssistantFromParts(parts) {
     const el = document.createElement('div');
     el.className = 'msg msg-assistant';
-    const bodyHTML = parts.map((p, i) => renderPart(p, i)).join('');
+    // Group consecutive tool_use parts into foldable rounds
+    const groups = [];
+    let toolGroup = [];
+    for (const p of parts) {
+      if (p.type === 'tool_use') {
+        toolGroup.push(p);
+      } else {
+        if (toolGroup.length) { groups.push({ kind: 'tools', parts: toolGroup }); toolGroup = []; }
+        groups.push({ kind: 'single', part: p });
+      }
+    }
+    if (toolGroup.length) groups.push({ kind: 'tools', parts: toolGroup });
+
+    const bodyHTML = groups.map(g => {
+      if (g.kind === 'single') return renderPart(g.part);
+      // Foldable tool-call round (collapsed by default)
+      const count = g.parts.length;
+      const names = g.parts.map(p => p.name || '?');
+      const inner = g.parts.map(p => renderPart(p)).join('');
+      return `<div class="part part-tool-round">
+        <button class="part-header" type="button">
+          <span class="part-icon"><i data-lucide="wrench" class="w-3.5 h-3.5"></i></span>
+          <span class="part-label">工具调用 · ${count}</span>
+          <span class="tool-names">${names.map(n => escapeHTML(n)).join(', ')}</span>
+          <i data-lucide="chevron-down" class="caret w-4 h-4"></i>
+        </button>
+        <div class="part-body">${inner}</div>
+      </div>`;
+    }).join('');
+
     el.innerHTML = `
       <div class="msg-avatar">AI</div>
       <div class="msg-body">
@@ -344,7 +435,7 @@
         <div class="msg-content">${bodyHTML}</div>
       </div>`;
     // wire up collapsibles
-    el.querySelectorAll('.part-thinking, .part-tool-use').forEach(p => {
+    el.querySelectorAll('.part-thinking, .part-tool-round').forEach(p => {
       const header = p.querySelector('.part-header');
       if (header) header.addEventListener('click', () => p.classList.toggle('open'));
     });
@@ -368,7 +459,7 @@
     if (p.type === 'tool_use') {
       let inp;
       try { inp = JSON.stringify(p.input || {}, null, 2); } catch { inp = String(p.input); }
-      return `<div class="part part-tool-use open">
+      return `<div class="part part-tool-use">
         <button class="part-header" type="button">
           <span class="part-icon"><i data-lucide="wrench" class="w-3.5 h-3.5"></i></span>
           <span class="part-label">工具调用</span>
@@ -390,7 +481,8 @@
     return Math.floor(d / 86400) + '天前';
   }
 
-  $('btn-refresh-sessions').addEventListener('click', refreshSessions);
+  const _btnRefreshSessions = $('btn-refresh-sessions');
+  if (_btnRefreshSessions) _btnRefreshSessions.addEventListener('click', refreshSessions);
 
   // Session search — debounced
   let _searchTimer = null;
@@ -442,8 +534,21 @@
   }
 
   /* ═════ Sidebar collapse ═════ */
-  $('sidebar-collapse').addEventListener('click', () => document.body.classList.add('sidebar-collapsed'));
-  $('sidebar-expand').addEventListener('click', () => document.body.classList.remove('sidebar-collapsed'));
+  $('sidebar-collapse')?.addEventListener('click', () => document.body.classList.add('sidebar-collapsed'));
+  $('sidebar-collapse-2')?.addEventListener('click', () => document.body.classList.add('sidebar-collapsed'));
+  $('sidebar-collapse-3')?.addEventListener('click', () => document.body.classList.add('sidebar-collapsed'));
+  $('sidebar-expand')?.addEventListener('click', () => document.body.classList.remove('sidebar-collapsed'));
+
+  /* ═════ Actions drawer toggle ═════ */
+  const actionsToggle = $('actions-toggle');
+  const actionsDrawer = $('actions-drawer');
+  if (actionsToggle && actionsDrawer) {
+    actionsToggle.addEventListener('click', () => {
+      actionsDrawer.classList.toggle('hidden');
+      const label = actionsToggle.querySelector('span');
+      if (label) label.textContent = actionsDrawer.classList.contains('hidden') ? '操作' : '收起';
+    });
+  }
 
   /* ═════ Messages ═════ */
   function clearWelcome() { const w = messagesEl.querySelector('.welcome'); if (w) w.remove(); }
@@ -584,12 +689,141 @@
     inputEl.style.height = Math.min(inputEl.scrollHeight, 220) + 'px';
   }
   inputEl.addEventListener('input', autoResize);
+
+  // ── Slash-command popup menu ──
+  let _slashMenu = null;
+  let _slashCmds = null;
+  let _slashIdx = -1;
+  let _slashFiltered = [];
+
+  function _ensureSlashMenu() {
+    if (_slashMenu) return _slashMenu;
+    _slashMenu = document.createElement('div');
+    _slashMenu.id = 'slash-menu';
+    _slashMenu.className = 'absolute bottom-full left-0 mb-1 w-80 max-h-64 overflow-y-auto bg-ink-800 border border-ink-600 rounded-lg shadow-xl z-50 hidden';
+    _slashMenu.style.cssText = 'scrollbar-width:thin;scrollbar-color:#475569 transparent;';
+    const inputBox = inputEl.closest('#input-box') || inputEl.parentElement;
+    inputBox.style.position = 'relative';
+    inputBox.appendChild(_slashMenu);
+    return _slashMenu;
+  }
+
+  async function _loadSlashCmds() {
+    if (_slashCmds) return _slashCmds;
+    try { _slashCmds = await API.fetchSlashCommands(); }
+    catch { _slashCmds = {}; }
+    return _slashCmds;
+  }
+
+  function _showSlashMenu(filter = '') {
+    const menu = _ensureSlashMenu();
+    const lower = filter.toLowerCase();
+    _slashFiltered = Object.entries(_slashCmds || {})
+      .filter(([k]) => k.includes(lower))
+      .sort((a, b) => a[0].localeCompare(b[0]));
+    if (_slashFiltered.length === 0) { _hideSlashMenu(); return; }
+    _slashIdx = -1;
+    menu.innerHTML = _slashFiltered.map(([name, info], i) =>
+      '<div class="slash-item flex items-center gap-2 px-3 py-2 cursor-pointer text-sm text-frost-200 hover:bg-ink-700 transition-colors" data-cmd="' + name + '" data-idx="' + i + '">' +
+        '<span class="text-accent-amber font-mono font-semibold">/' + name + '</span>' +
+        '<span class="text-frost-400 text-xs truncate">' + (info.brief || '') + '</span>' +
+      '</div>'
+    ).join('');
+    menu.querySelectorAll('.slash-item').forEach(el => {
+      el.addEventListener('mousedown', (ev) => {
+        ev.preventDefault(); ev.stopPropagation();
+        _selectSlashCmd(el.dataset.cmd);
+      });
+    });
+    menu.classList.remove('hidden');
+  }
+
+  function _hideSlashMenu() {
+    if (_slashMenu) _slashMenu.classList.add('hidden');
+    _slashIdx = -1;
+  }
+
+  function _highlightSlashItem(idx) {
+    if (!_slashMenu) return;
+    const items = _slashMenu.querySelectorAll('.slash-item');
+    items.forEach((el, i) => {
+      el.classList.toggle('bg-ink-700', i === idx);
+      el.classList.toggle('ring-1', i === idx);
+      el.classList.toggle('ring-accent-amber/40', i === idx);
+    });
+    items[idx]?.scrollIntoView({ block: 'nearest' });
+  }
+
+  function _selectSlashCmd(cmdName) {
+    _hideSlashMenu();
+    const val = inputEl.value;
+    const slashPos = val.lastIndexOf('/');
+    if (slashPos >= 0) {
+      inputEl.value = val.substring(0, slashPos) + '/' + cmdName + ' ';
+      inputEl.setSelectionRange(inputEl.value.length, inputEl.value.length);
+    }
+    inputEl.focus();
+    autoResize();
+  }
+
+  // Detect "/" typing for slash menu
+  inputEl.addEventListener('input', async () => {
+    const val = inputEl.value;
+    const cursorPos = inputEl.selectionStart;
+    const textBeforeCursor = val.substring(0, cursorPos);
+    const slashMatch = textBeforeCursor.match(/(?:^|\s)(\/(\S*))$/);
+    if (slashMatch) {
+      await _loadSlashCmds();
+      _showSlashMenu(slashMatch[2]);
+    } else {
+      _hideSlashMenu();
+    }
+  });
+
   inputEl.addEventListener('keydown', (e) => {
+    // Slash menu navigation
+    if (_slashMenu && !_slashMenu.classList.contains('hidden')) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        _slashIdx = Math.min(_slashIdx + 1, _slashFiltered.length - 1);
+        _highlightSlashItem(_slashIdx);
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        _slashIdx = Math.max(_slashIdx - 1, 0);
+        _highlightSlashItem(_slashIdx);
+        return;
+      }
+      if (e.key === 'Enter' && _slashIdx >= 0) {
+        e.preventDefault();
+        _selectSlashCmd(_slashFiltered[_slashIdx][0]);
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        _hideSlashMenu();
+        return;
+      }
+      if (e.key === 'Tab' && _slashIdx >= 0) {
+        e.preventDefault();
+        _selectSlashCmd(_slashFiltered[_slashIdx][0]);
+        return;
+      }
+    }
+    // Normal Enter -> send
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
       e.preventDefault();
       sendTask();
     }
     if (e.key === 'Escape' && state.running) { e.preventDefault(); API.send('abort'); }
+  });
+
+  // Close menu on click outside
+  document.addEventListener('click', (e) => {
+    if (_slashMenu && !_slashMenu.contains(e.target) && e.target !== inputEl) {
+      _hideSlashMenu();
+    }
   });
   sendBtn.addEventListener('click', () => {
     if (state.running) { API.send('abort'); }
@@ -597,6 +831,7 @@
   });
 
   function sendTask() {
+    if (state.viewingSessionPath) returnToActive();
     const text = inputEl.value.trim();
     const imgs = state.attachments.filter(a => a.kind === 'image');
     const files = state.attachments.filter(a => a.kind === 'file');
@@ -1143,10 +1378,21 @@
   }
   const savedTheme = localStorage.getItem('ga-theme') || 'dark';
   applyTheme(savedTheme);
+  // Bind theme-toggle (checkbox in settings panel, if exists)
   const themeToggle = $('theme-toggle');
   if (themeToggle) {
     themeToggle.addEventListener('change', (e) => {
       const next = e.target.checked ? 'light' : 'dark';
+      localStorage.setItem('ga-theme', next);
+      applyTheme(next);
+    });
+  }
+  // Bind theme-toggle-rail (icon button in icon rail)
+  const themeToggleRail = $('theme-toggle-rail');
+  if (themeToggleRail) {
+    themeToggleRail.addEventListener('click', () => {
+      const current = document.documentElement.classList.contains('theme-light') ? 'light' : 'dark';
+      const next = current === 'dark' ? 'light' : 'dark';
       localStorage.setItem('ga-theme', next);
       applyTheme(next);
     });
@@ -1388,6 +1634,371 @@
       $('settings-readonly-warn').classList.add('hidden');
     } catch(e) { showToast('操作失败: ' + e.message, 'error'); }
   });
+
+  /* ═════ Tasks View (Scheduler / Goal / Hive) ═════ */
+  let _tasksInited = false;
+  function initTasksView() {
+    if (!_tasksInited) {
+      _tasksInited = true;
+      // Sub-tab switching
+      ['scheduler','goal','hive'].forEach(id => {
+        $('task-tab-' + id).addEventListener('click', () => {
+          document.querySelectorAll('#view-tasks .sop-tab-btn').forEach(b => b.classList.toggle('active', b.id === 'task-tab-' + id));
+          ['scheduler','goal','hive'].forEach(p => $('task-panel-' + p).classList.toggle('hidden', p !== id));
+        });
+      });
+      // Scheduler buttons
+      $('btn-scheduler-add').addEventListener('click', () => _schedulerEdit(null));
+      $('btn-scheduler-log').addEventListener('click', () => {
+        const el = $('scheduler-log-content');
+        el.classList.toggle('hidden');
+        if (!el.classList.contains('hidden')) _loadSchedulerLog();
+      });
+      // Goal buttons
+      $('btn-goal-new').addEventListener('click', () => {
+        $('goal-form').classList.remove('hidden');
+      });
+      $('btn-goal-cancel').addEventListener('click', () => $('goal-form').classList.add('hidden'));
+      $('btn-goal-create').addEventListener('click', _goalCreate);
+      $('btn-goal-stop').addEventListener('click', _goalStop);
+      // Hive buttons
+      $('btn-hive-new').addEventListener('click', () => $('hive-form').classList.toggle('hidden'));
+      $('btn-hive-cancel').addEventListener('click', () => $('hive-form').classList.add('hidden'));
+      $('btn-hive-create').addEventListener('click', _hiveCreate);
+    }
+    _loadSchedulerTasks();
+    _loadGoalState();
+    _loadHiveSessions();
+  }
+
+  // ── Scheduler helpers ──
+  async function _loadSchedulerTasks() {
+    try {
+      const data = await API.schedulerTasks();
+      const tasks = data.tasks || [];
+      $('scheduler-count').textContent = tasks.length;
+      const el = $('scheduler-list');
+      if (!tasks.length) { el.innerHTML = '<div class="text-frost-300 text-[12.5px] p-4 text-center">暂无定时任务</div>'; return; }
+      el.innerHTML = tasks.map(t => {
+        const enabled = t.enabled !== false;
+        const nextRun = t.next_run || '—';
+        return `<div class="settings-card p-4 flex items-center justify-between gap-3">
+          <div class="min-w-0 flex-1">
+            <div class="text-[13px] text-frost-100 font-medium truncate">${_esc(t.name || t.id)}</div>
+            <div class="text-[11px] text-frost-400 mt-0.5">Cron: ${_esc(t.cron || '?')} · 下次: ${_esc(nextRun)}</div>
+          </div>
+          <div class="flex items-center gap-2 shrink-0">
+            <label class="relative inline-flex items-center cursor-pointer">
+              <input type="checkbox" ${enabled ? 'checked' : ''} data-task-id="${_esc(t.id)}" class="sr-only peer sched-toggle">
+              <div class="w-9 h-[18px] bg-white/10 peer-checked:bg-brand-500 rounded-full transition"></div>
+            </label>
+            <button class="p-1 rounded hover:bg-white/10 text-frost-300 sched-edit" data-task-id="${_esc(t.id)}"><i data-lucide="pencil" class="w-3.5 h-3.5"></i></button>
+            <button class="p-1 rounded hover:bg-white/10 text-red-300 sched-del" data-task-id="${_esc(t.id)}"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button>
+          </div>
+        </div>`;
+      }).join('');
+      lucide.createIcons();
+      // Bind events
+      el.querySelectorAll('.sched-toggle').forEach(cb => cb.addEventListener('change', async e => {
+        try { await API.schedulerUpdate(e.target.dataset.taskId, { enabled: e.target.checked }); } catch(e) { showToast(e.message, 'error'); }
+      }));
+      el.querySelectorAll('.sched-edit').forEach(b => b.addEventListener('click', () => _schedulerEdit(b.dataset.taskId)));
+      el.querySelectorAll('.sched-del').forEach(b => b.addEventListener('click', async () => {
+        if (!confirm('确认删除此任务?')) return;
+        try { await API.schedulerDelete(b.dataset.taskId); _loadSchedulerTasks(); } catch(e) { showToast(e.message, 'error'); }
+      }));
+    } catch(e) { $('scheduler-list').innerHTML = `<div class="text-red-300 text-[12.5px] p-4">加载失败: ${e.message}</div>`; }
+  }
+
+  async function _loadSchedulerLog() {
+    try {
+      const data = await API.schedulerLog();
+      $('scheduler-log-content').textContent = data.log || '(空)';
+    } catch(e) { $('scheduler-log-content').textContent = '加载失败: ' + e.message; }
+  }
+
+  function _schedulerEdit(taskId) {
+    // Simple prompt-based edit for now
+    const name = prompt(taskId ? '修改任务名称(留空不改):' : '任务名称:');
+    if (!name && !taskId) return;
+    const cron = prompt('Cron表达式 (如 "*/30 * * * *"):');
+    if (!cron) return;
+    const prompt_text = prompt('执行提示词:');
+    if (!prompt_text) return;
+    const body = { name: name || undefined, cron, prompt: prompt_text, enabled: true };
+    if (taskId) { API.schedulerUpdate(taskId, body).then(() => _loadSchedulerTasks()).catch(e => showToast(e.message, 'error')); }
+    else { API.schedulerCreate(body).then(() => _loadSchedulerTasks()).catch(e => showToast(e.message, 'error')); }
+  }
+
+  // ── Goal helpers ──
+  async function _loadGoalState() {
+    try {
+      const data = await API.goalState();
+      const s = data.state;
+      if (!s || !s.objective) {
+        $('goal-status').innerHTML = '<div class="text-frost-300 text-[12.5px] p-4 text-center">暂无活跃目标</div>';
+        $('btn-goal-stop').classList.add('hidden');
+        return;
+      }
+      $('btn-goal-stop').classList.toggle('hidden', s.status !== 'running');
+      const pct = s.progress || 0;
+      const turns = s.current_turn || 0;
+      const maxT = s.max_turns || '?';
+      const budget = s.time_budget || '?';
+      const elapsed = s.elapsed_hours ? s.elapsed_hours.toFixed(2) + 'h' : '—';
+      $('goal-status').innerHTML = `
+        <div class="flex items-center justify-between mb-3">
+          <div class="text-[13.5px] text-frost-50 font-medium">${_esc(s.objective)}</div>
+          <span class="text-[11px] px-2 py-0.5 rounded-full ${s.status === 'running' ? 'bg-brand-500/20 text-brand-300' : 'bg-white/10 text-frost-300'}">${_esc(s.status || 'idle')}</span>
+        </div>
+        <div class="w-full h-2 bg-white/10 rounded-full overflow-hidden mb-2">
+          <div class="h-full bg-gradient-to-r from-brand-400 to-accent-violet rounded-full transition-all" style="width:${Math.min(pct,100)}%"></div>
+        </div>
+        <div class="flex items-center gap-4 text-[11px] text-frost-400">
+          <span>进度 ${pct}%</span>
+          <span>轮次 ${turns}/${maxT}</span>
+          <span>预算 ${budget}h</span>
+          <span>已用 ${elapsed}</span>
+        </div>
+        ${s.current_step ? `<div class="mt-3 p-3 bg-ink-900/60 rounded-lg text-[11.5px] text-frost-300 border border-white/5"><span class="text-frost-500">当前步骤:</span> ${_esc(s.current_step)}</div>` : ''}
+      `;
+    } catch(e) { $('goal-status').innerHTML = `<div class="text-red-300 text-[12.5px]">加载失败: ${e.message}</div>`; }
+  }
+
+  async function _goalCreate() {
+    const objective = $('goal-objective').value.trim();
+    if (!objective) { showToast('请输入目标描述', 'error'); return; }
+    try {
+      await API.goalStart({
+        objective,
+        time_budget: parseFloat($('goal-budget').value) || 1,
+        max_turns: parseInt($('goal-max-turns').value) || 200,
+        done_prompt: $('goal-done-prompt').value.trim() || undefined,
+      });
+      $('goal-form').classList.add('hidden');
+      showToast('目标已启动');
+      _loadGoalState();
+    } catch(e) { showToast('启动失败: ' + e.message, 'error'); }
+  }
+
+  async function _goalStop() {
+    if (!confirm('确认停止当前目标?')) return;
+    try { await API.goalStop(); showToast('目标已停止'); _loadGoalState(); } catch(e) { showToast(e.message, 'error'); }
+  }
+
+  // ── Hive helpers ──
+  async function _loadHiveSessions() {
+    try {
+      const data = await API.hiveSessions();
+      const sessions = data.sessions || [];
+      const el = $('hive-list');
+      if (!sessions.length) { el.innerHTML = '<div class="text-frost-300 text-[12.5px] p-4 text-center">暂无 Hive 集群</div>'; return; }
+      el.innerHTML = sessions.map(s => {
+        return `<div class="settings-card p-4">
+          <div class="flex items-center justify-between mb-2">
+            <div class="text-[13px] text-frost-100 font-medium">${_esc(s.name)}</div>
+            <span class="text-[11px] text-frost-400">${s.workers || 0} workers</span>
+          </div>
+          ${s.commands ? `<pre class="text-[11px] text-brand-300 bg-ink-900 p-2 rounded-lg font-mono whitespace-pre-wrap border border-white/5 max-h-[120px] overflow-y-auto">${_esc(s.commands)}</pre>` : ''}
+        </div>`;
+      }).join('');
+    } catch(e) { $('hive-list').innerHTML = `<div class="text-red-300 text-[12.5px] p-4">加载失败: ${e.message}</div>`; }
+  }
+
+  async function _hiveCreate() {
+    const name = $('hive-name').value.trim();
+    if (!name) { showToast('请输入集群名称', 'error'); return; }
+    const objective = $('hive-objective').value.trim();
+    const workers = parseInt($('hive-workers').value) || 3;
+    try {
+      const data = await API.hiveCreate({ name, objective, workers });
+      if (data.commands) {
+        $('hive-commands').classList.remove('hidden');
+        $('hive-commands-text').textContent = data.commands.join('\n\n');
+        showToast('启动命令已生成，请复制到终端执行');
+      }
+      _loadHiveSessions();
+    } catch(e) { showToast('创建失败: ' + e.message, 'error'); }
+  }
+
+  function _esc(s) { if (!s) return ''; const d = document.createElement('div'); d.textContent = String(s); return d.innerHTML; }
+
+  /* ═════ MCP Panel ═════ */
+  async function loadMCPPanel() {
+    const listEl = $('mcp-servers-list');
+    if (!listEl) return;
+    listEl.innerHTML = '<div class="text-frost-400 text-[11.5px] p-3 text-center">加载中...</div>';
+    try {
+      const _res = await API.mcpServers();
+      const servers = Array.isArray(_res) ? _res : (_res && _res.servers || []);
+      if (!servers || servers.length === 0) {
+        listEl.innerHTML = '<div class="text-frost-400 text-[11.5px] p-3 text-center">暂无MCP服务器</div>';
+        return;
+      }
+      listEl.innerHTML = servers.map(s => {
+        const statusColor = s.connected ? '#4ade80' : '#ef4444';
+        const statusText = s.connected ? '已连接' : '未连接';
+        const toolsHtml = (s.tools || []).map(t =>
+          `<div class="text-[10.5px] text-frost-300 py-0.5 px-2 rounded bg-white/5 truncate" title="${_esc(t.description || '')}">
+            <span class="text-accent-violet">⬡</span> ${_esc(t.name)}
+          </div>`
+        ).join('');
+        return `
+          <div class="mcp-server-card bg-white/[0.03] border border-white/[0.06] rounded-xl p-3 space-y-2">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-2 min-w-0">
+                <span class="w-2 h-2 rounded-full shrink-0" style="background:${statusColor}"></span>
+                <span class="text-[12px] font-medium text-frost-100 truncate">${_esc(s.name)}</span>
+              </div>
+              <div class="flex items-center gap-1">
+                <label class="relative inline-flex items-center cursor-pointer" title="${s.enabled ? '禁用' : '启用'}">
+                  <input type="checkbox" class="mcp-toggle sr-only" data-server="${_esc(s.name)}" ${s.enabled ? 'checked' : ''}>
+                  <div class="toggle-track w-8 h-[18px] rounded-full transition-colors relative ${s.enabled ? 'bg-brand-500' : 'bg-white/15'}">
+                    <div class="toggle-thumb absolute top-[2px] ${s.enabled ? 'left-[18px]' : 'left-[2px]'} w-[14px] h-[14px] bg-white rounded-full transition-all shadow"></div>
+                  </div>
+                </label>
+                <button class="mcp-test-btn p-1 rounded text-frost-500 hover:text-frost-50 hover:bg-white/8 transition" data-server="${_esc(s.name)}" title="测试">
+                  <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+                </button>
+                <button class="mcp-del-btn p-1 rounded text-frost-500 hover:text-red-400 hover:bg-white/8 transition" data-server="${_esc(s.name)}" title="删除">
+                  <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                </button>
+              </div>
+            </div>
+            <div class="text-[10.5px] text-frost-500">${_esc(s.type || 'http')} · ${statusText} · ${(s.tools || []).length}个工具</div>
+            <div class="space-y-1">${toolsHtml || '<div class="text-[10.5px] text-frost-500">无工具</div>'}</div>
+          </div>`;
+      }).join('');
+
+      // Bind delete buttons
+      listEl.querySelectorAll('.mcp-del-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          if (!confirm(`确认删除服务器 "${btn.dataset.server}"？`)) return;
+          try {
+            await API.mcpDelete(btn.dataset.server);
+            showToast('✅ 已删除', 'success');
+            loadMCPPanel();
+          } catch (e) { showToast('删除失败: ' + e.message, 'error'); }
+        });
+      });
+      // Bind test buttons
+      listEl.querySelectorAll('.mcp-test-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          showToast('测试连接中...', 'info');
+          try {
+            const r = await API.mcpTest(btn.dataset.server);
+            showToast(r.ok ? '✅ 连接成功' : '❌ 连接失败', r.ok ? 'success' : 'error');
+            loadMCPPanel();
+          } catch (e) { showToast('测试失败: ' + e.message, 'error'); }
+        });
+      });
+      // Bind toggle switches
+      listEl.querySelectorAll('.mcp-toggle').forEach(chk => {
+        chk.addEventListener('change', async () => {
+          const name = chk.dataset.server;
+          try {
+            const r = await API.mcpToggle(name);
+            showToast(r.enabled ? '✅ 已启用' : '⏸ 已禁用', 'success');
+            loadMCPPanel();
+          } catch (e) { showToast('切换失败: ' + e.message, 'error'); loadMCPPanel(); }
+        });
+      });
+    } catch (e) {
+      listEl.innerHTML = `<div class="text-frost-400 text-[11.5px] p-3 text-center">加载失败: ${_esc(e.message)}</div>`;
+    }
+  }
+
+  // MCP refresh & add buttons
+  $('mcp-refresh')?.addEventListener('click', () => loadMCPPanel());
+  
+  // MCP Add Form: toggle and submit
+  const mcpAddForm = $('mcp-add-form');
+  const mcpAddBtn = $('btn-add-mcp-server');
+  const mcpAddConfirm = $('mcp-add-confirm');
+  const mcpAddCancel = $('mcp-add-cancel');
+
+  if (mcpAddBtn && mcpAddForm) {
+    mcpAddBtn.addEventListener('click', () => {
+      mcpAddForm.classList.toggle('hidden');
+      if (!mcpAddForm.classList.contains('hidden')) {
+        $('mcp-add-name')?.focus();
+        mcpAddBtn.innerHTML = '<i data-lucide="x" class="w-4 h-4"></i> 取消添加';
+        lucide.createIcons();
+      } else {
+        mcpAddBtn.innerHTML = '<i data-lucide="plus" class="w-4 h-4"></i> 添加 MCP 服务器';
+        lucide.createIcons();
+      }
+    });
+  }
+  if (mcpAddCancel) {
+    mcpAddCancel.addEventListener('click', () => {
+      if (mcpAddForm) mcpAddForm.classList.add('hidden');
+      if (mcpAddBtn) {
+        mcpAddBtn.innerHTML = '<i data-lucide="plus" class="w-4 h-4"></i> 添加 MCP 服务器';
+        lucide.createIcons();
+      }
+    });
+  }
+  if (mcpAddConfirm) {
+    mcpAddConfirm.addEventListener('click', () => {
+      const name = $('mcp-add-name')?.value?.trim();
+      const url = $('mcp-add-url')?.value?.trim();
+      const transport = $('mcp-add-transport')?.value || 'http';
+      const headersStr = $('mcp-add-headers')?.value?.trim();
+      if (!name) { showToast('请输入服务器名称', 'error'); return; }
+      if (!url) { showToast('请输入服务器URL', 'error'); return; }
+      let hdr = {};
+      try { hdr = headersStr ? JSON.parse(headersStr) : {}; } catch { showToast('Headers JSON格式错误', 'error'); return; }
+      mcpAddConfirm.disabled = true;
+      mcpAddConfirm.textContent = '添加中...';
+      API.mcpAdd(name, url, transport, hdr)
+        .then(() => {
+          showToast('✅ 已添加: ' + name, 'success');
+          loadMCPPanel();
+          // Reset form
+          if (mcpAddForm) mcpAddForm.classList.add('hidden');
+          if (mcpAddBtn) {
+            mcpAddBtn.innerHTML = '<i data-lucide="plus" class="w-4 h-4"></i> 添加 MCP 服务器';
+            lucide.createIcons();
+          }
+          ['mcp-add-name','mcp-add-url','mcp-add-headers','mcp-add-desc'].forEach(id => {
+            const el = $(id); if (el) el.value = '';
+          });
+        })
+        .catch(e => showToast('添加失败: ' + e.message, 'error'))
+        .finally(() => { mcpAddConfirm.disabled = false; mcpAddConfirm.textContent = '确认添加'; });
+    });
+  }
+  $('sidebar-collapse-mcp')?.addEventListener('click', () => {
+    document.body.classList.add('sidebar-collapsed');
+  });
+
+  /* ═════ Sidebar Resize ═════ */
+  const resizeHandle = $('sidebar-resize-handle');
+  const sidebarPanel = $('sidebar');
+  if (resizeHandle && sidebarPanel) {
+    let resizing = false, startX = 0, startW = 0;
+    resizeHandle.addEventListener('mousedown', (e) => {
+      resizing = true;
+      startX = e.clientX;
+      startW = sidebarPanel.offsetWidth;
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+      e.preventDefault();
+    });
+    document.addEventListener('mousemove', (e) => {
+      if (!resizing) return;
+      const dx = e.clientX - startX;
+      const newW = Math.max(180, Math.min(480, startW + dx));
+      sidebarPanel.style.width = newW + 'px';
+    });
+    document.addEventListener('mouseup', () => {
+      if (!resizing) return;
+      resizing = false;
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    });
+  }
 
   /* ═════ Boot ═════ */
   lucide.createIcons();

@@ -20,6 +20,43 @@ def load_tool_schema(suffix=''):
     TOOLS_SCHEMA = json.loads(TS if os.name == 'nt' else TS.replace('powershell', 'bash'))
 load_tool_schema()
 
+def init_mcp_tools():
+    """Initialize MCP connections and inject MCP tools into TOOLS_SCHEMA."""
+    global TOOLS_SCHEMA
+    try:
+        import mcp_client as _mcp
+        _mcp.init_global_manager(os.path.join(script_dir, 'config', 'mcp_servers.json'))
+        mgr = _mcp.get_global_manager()
+        if mgr and mgr.clients:
+            mcp_tools = mgr.get_flat_tools()
+            # Add mcp_tool dispatch function to schema
+            mcp_dispatch = {
+                "type": "function",
+                "function": {
+                    "name": "mcp_tool",
+                    "description": "调用MCP(Model Context Protocol)外部工具。通过MCP协议连接外部服务器调用其工具能力，如网络搜索、网页阅读、代码仓库分析等。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "server": {"type": "string", "description": "MCP服务器名称"},
+                            "tool": {"type": "string", "description": "要调用的工具名称"},
+                            "arguments": {"type": "object", "description": "工具参数"}
+                        },
+                        "required": ["server", "tool", "arguments"]
+                    }
+                }
+            }
+            # Prevent duplicate injection
+            if not any(t['function']['name'] == 'mcp_tool' for t in TOOLS_SCHEMA):
+                TOOLS_SCHEMA = TOOLS_SCHEMA + [mcp_dispatch]
+            print(f'[MCP] Initialized {len(mgr.clients)} servers, {len(mcp_tools)} tools injected')
+    except Exception as e:
+        print(f'[MCP] Init failed (non-fatal): {e}')
+try:
+    init_mcp_tools()
+except Exception:
+    pass
+
 lang_suffix = '_en' if os.environ.get('GA_LANG', '') == 'en' else ''
 mem_dir = os.path.join(script_dir, 'memory')
 if not os.path.exists(mem_dir): os.makedirs(mem_dir)
@@ -94,6 +131,23 @@ def get_system_prompt():
     with open(os.path.join(script_dir, f'assets/sys_prompt{lang_suffix}.txt'), 'r', encoding='utf-8') as f: prompt = f.read()
     prompt += f"\nToday: {time.strftime('%Y-%m-%d %a')}\n"
     prompt += get_global_memory()
+    # Inject MCP tool descriptions if available
+    try:
+        from mcp_client import get_global_manager
+        mgr = get_global_manager()
+        if mgr:
+            flat = mgr.get_flat_tools()
+            if flat:
+                lines = ["\n[MCP Tools] 以下MCP工具可通过 mcp_tool 调用："]
+                for t in flat:
+                    fn = t.get('function', {})
+                    name = fn.get('name', '')
+                    desc = fn.get('description', '')[:120]
+                    params = list(fn.get('parameters', {}).get('properties', {}).keys())
+                    lines.append(f"- {name}({', '.join(params)}): {desc}")
+                prompt += '\n'.join(lines) + '\n'
+    except Exception:
+        pass
     return prompt
 
 class GenericAgent:
@@ -272,6 +326,7 @@ class GenericAgent:
                 for chunk in gen:
                     if consume_file(self.task_dir, '_stop'): self.abort() 
                     if self.stop_sig: break
+                    if isinstance(chunk, dict): continue  # yield_info dict, skip
                     full_resp += chunk
                     if len(full_resp) - last_pos > 50 or 'LLM Running' in chunk:
                         display_queue.put({'next': full_resp[last_pos:] if self.inc_out else full_resp, 'source': source})

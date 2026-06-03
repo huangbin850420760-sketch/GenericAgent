@@ -557,6 +557,33 @@ class GenericAgentHandler(BaseHandler):
         else: result = "Memory Management SOP not found. Do not update memory."
         return StepOutcome(result, next_prompt=prompt)
 
+    def do_mcp_tool(self, args, response):
+        '''调用MCP工具。通过MCPManager连接外部MCP服务器并调用其工具。
+        args: {"server": "服务器名", "tool": "工具名", "arguments": {...}}'''
+        import mcp_client as _mcp
+        server = args.get('server', '')
+        tool = args.get('tool', '')
+        arguments = args.get('arguments', {})
+        yield f"\n[Action] MCP call: {server}/{tool}({json.dumps(arguments, ensure_ascii=False)[:200]})\n"
+        mgr = _mcp.get_global_manager()
+        if mgr is None:
+            yield "[Status] ❌ MCP未初始化，请检查config/mcp_servers.json配置\n"
+            return StepOutcome({"status": "error", "msg": "MCP manager not initialized"}, next_prompt="\n")
+        try:
+            result = mgr.call(server, tool, arguments)
+            if isinstance(result, str):
+                text = result
+            else:
+                text = json.dumps(result, ensure_ascii=False)
+            maxlen = 12000 // max(args.get('_tool_num', 1), 1)
+            text = smart_format(text, max_str_len=maxlen, omit_str='\n\n[MCP result truncated]\n\n')
+            yield f"[Status] ✅ MCP {server}/{tool} 返回成功 ({len(text)} chars)\n"
+            next_prompt = self._get_anchor_prompt(skip=args.get('_index', 0) > 0)
+            return StepOutcome({"status": "success", "result": text}, next_prompt=next_prompt)
+        except Exception as e:
+            yield f"[Status] ❌ MCP调用失败: {e}\n"
+            return StepOutcome({"status": "error", "msg": str(e)}, next_prompt="\n")
+
     def _fold_earlier(self, lines):
         FALLBACK = '直接回答了用户问题'
         parts, cnt, last = [], 0, ''
