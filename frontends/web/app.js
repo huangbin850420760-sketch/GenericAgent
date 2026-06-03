@@ -254,40 +254,8 @@
   async function viewSession(path) {
     // Switch to chat tab if not already there
     if (state.tab !== 'chat') switchTab('chat');
-    // If already viewing another session or same, save nothing (already saved)
-    if (!state.viewingSessionPath) {
-      // Save current active conversation HTML before switching
-      state.savedActiveHTML = messagesEl.innerHTML;
-    }
-    state.viewingSessionPath = path;
-    try {
-      const r = await API.getSessionHistory(path);
-      const messages = r.messages || [];
-      // Derive title
-      const firstUser = messages.find(m => m.role === 'user');
-      const preview = firstUser
-        ? String((firstUser.parts || []).filter(p => p.type === 'user_text').map(p => p.content).join(' ') || '').slice(0, 48)
-        : '';
-      const fname = path.split(/[\\/]/).pop().replace(/\.(json|txt)$/i, '');
-      const title = preview || fname || '历史会话';
-      const titleEl = $('conversation-title');
-      if (titleEl) titleEl.textContent = '📖 ' + title;
-      renderSessionHistory(messages);
-      // Insert action bar at top of messages
-      const bar = document.createElement('div');
-      bar.id = 'session-view-bar';
-      bar.className = 'flex items-center gap-2 p-3 mb-2 bg-accent-violet/10 border border-accent-violet/20 rounded-xl text-sm';
-      bar.innerHTML = `
-        <span class="text-frost-300 flex-1">📖 只读查看历史会话</span>
-        <button id="btn-return-active" class="px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-frost-200 transition">← 返回当前对话</button>
-        <button id="btn-restore-session" class="px-3 py-1.5 rounded-lg bg-accent-violet hover:bg-accent-violet/80 text-white transition">恢复此会话</button>
-      `;
-      messagesEl.prepend(bar);
-      $('btn-return-active').addEventListener('click', returnToActive);
-      $('btn-restore-session').addEventListener('click', () => restoreAndShow(path));
-    } catch (e) {
-      showToast('加载历史失败: ' + e.message, 'error');
-    }
+    // Directly restore the session instead of read-only viewing
+    restoreAndShow(path);
   }
 
   function returnToActive() {
@@ -303,7 +271,6 @@
   }
 
   async function restoreAndShow(path) {
-    if (!confirm('恢复此会话？当前上下文将被清空。')) return;
     try {
       const r = await API.restoreSession(path);
       state.currentSessionPath = path;
@@ -850,6 +817,14 @@
   }
 
   /* ═════ Attachments ═════ */
+  const btnGenTodo = document.getElementById('btn-generate-todo');
+  if (btnGenTodo) {
+    btnGenTodo.addEventListener('click', () => {
+      if (state.running) { showToast('请先停止当前任务', 'error'); return; }
+      inputEl.value = '按照自主行动的规划部分，充分分析我的情况，给我生成一批TODO，务必让我感兴趣';
+      sendTask();
+    });
+  }
   function renderAttachments() {
     attachmentsEl.innerHTML = state.attachments.map((a, i) => {
       if (a.kind === 'image') {

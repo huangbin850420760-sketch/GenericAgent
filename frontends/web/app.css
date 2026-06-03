@@ -12,7 +12,7 @@
   background: rgba(30,30,30,0.85);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
-  border-right: 1px solid rgba(255,255,255,0.06);
+  border-right: 1px solid #262626;
   position: relative;
 }
 .sidebar-glass::before { display: none; }
@@ -1447,6 +1447,11 @@ select.cfg-input { cursor: pointer; }
 /* ── Resize handle ── */
 .theme-light #sidebar-resize-handle { background: rgba(15,23,42,0.06); }
 .theme-light #sidebar-resize-handle:hover { background: rgba(0,122,204,0.3); }
+
+/* ── Light theme structural borders (matching Codex #E5E5E5) ── */
+.theme-light .sidebar-glass { border-right-color: #E5E5E5 !important; }
+.theme-light header.border-b { border-bottom-color: #E5E5E5 !important; }
+.theme-light .border-t.border-\[\#262626\] { border-top-color: #E5E5E5 !important; }
 
 /* ── Autonomous toggle ── */
 .theme-light #autonomous-toggle + div { background: rgba(15,23,42,0.12) !important; }

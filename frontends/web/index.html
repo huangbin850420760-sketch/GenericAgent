@@ -126,7 +126,7 @@
       </div>
 
       <!-- ── Bottom bar ── -->
-      <div class="px-3 py-2 border-t border-white/6 shrink-0">
+      <div class="px-3 py-2 border-t border-[#262626] shrink-0">
         <div class="flex items-center gap-2">
           <span class="text-[11px] text-white/40">自主</span>
           <span id="idle-value" class="text-[11px] font-mono text-white/40">—</span>
@@ -160,13 +160,10 @@
       <button data-tab="settings" class="rail-btn" title="设置"><i data-lucide="settings" class="w-4 h-4"></i></button>
     </div>
 
-    <!-- Resize handle between sidebar and main -->
-    <div id="sidebar-resize-handle" class="w-1 cursor-col-resize hover:bg-[#007ACC]/40 active:bg-[#007ACC]/60 transition-colors shrink-0" title="拖拽调整侧栏宽度"></div>
-
     <!-- ═══════════ MAIN (rounded container) ═══════════ -->
-    <div class="flex-1 min-w-0 flex flex-col overflow-hidden bg-[#1a1a1a] rounded-tl-xl border-l border-white/6">
+    <div class="flex-1 min-w-0 flex flex-col overflow-hidden bg-[#1a1a1a] rounded-tl-xl">
       <!-- Topbar (minimal: conversation title + model selector) -->
-      <header class="h-11 px-5 flex items-center border-b border-white/6 shrink-0">
+      <header class="h-11 px-5 flex items-center border-b border-[#262626] shrink-0 rounded-tl-xl overflow-hidden">
         <div class="flex items-center gap-3 min-w-0 flex-1">
           <span id="conversation-title" class="text-white/80 font-medium truncate text-[14px]">新对话</span>
         </div>
@@ -222,6 +219,7 @@
             <div class="flex items-center gap-1.5">
               <span id="status-dot" class="w-1.5 h-1.5 rounded-full bg-frost-500 transition"></span>
               <span id="status-text">就绪</span>
+              <button id="btn-generate-todo" class="ml-2 px-2 py-0.5 rounded-md bg-white/5 hover:bg-white/10 text-frost-300 hover:text-frost-100 transition text-[11px]" title="分析当前情况，生成一批TODO">🎯 找点事做</button>
             </div>
             <div class="flex items-center gap-3 text-frost-400">
               <span><kbd class="kbd">Enter</kbd> 发送</span>
