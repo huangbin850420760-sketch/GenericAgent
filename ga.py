@@ -664,6 +664,34 @@ class GenericAgentHandler(BaseHandler):
                 cap_summary = get_capability_summary_text()
                 next_prompt += f"\n\n{cap_summary}"
         except Exception: pass
+        # T2.1.4: [Relevant Experience] 跨会话情境检索注入
+        try:
+            from memory.experience_index import search as _exp_search
+            _exp_results = _exp_search(next_prompt, limit=3, script_dir=script_dir)
+            if _exp_results:
+                _exp_text = '\n'.join(f"- [{r.get('task_type','')}] {r.get('summary','')} (relevance:{r.get('relevance',0):.1f})"
+                                      for r in _exp_results)
+                next_prompt += f"\n\n[Relevant Experience]\n{_exp_text}\n"
+        except Exception: pass
+        # T1.6.2: 偏好注入prompt
+        try:
+            _pref_path = os.path.join(script_dir, 'memory', 'preferences.json')
+            if os.path.exists(_pref_path):
+                import json as _json
+                with open(_pref_path, 'r', encoding='utf-8') as _pf:
+                    _prefs = _json.load(_pf)
+                if _prefs:
+                    _pref_lines = [f"- {k}: {v}" for k, v in _prefs.items() if isinstance(v, (str, int, float, bool))]
+                    if _pref_lines:
+                        next_prompt += f"\n\n[User Preferences]\n" + '\n'.join(_pref_lines) + '\n'
+        except Exception: pass
+        # T3.3.1: MCP工具推荐注入
+        try:
+            from memory.mcp_recommender import format_recommendation_hint
+            _mcp_hint = format_recommendation_hint(next_prompt, script_dir=script_dir)
+            if _mcp_hint:
+                next_prompt += f"\n{_mcp_hint}\n"
+        except Exception: pass
         for hook in list(getattr(self.parent, '_turn_end_hooks', {}).values()): hook(locals())  # current readonly
         return next_prompt
 

@@ -1394,6 +1394,11 @@ def _api_sop():
     content = _read_sop(name)
     if content is None:
         return _json({'error': 'sop not found'}, 404)
+    # T3.2.1: SOP使用统计追踪
+    try:
+        from sop_tracker import record_sop_usage
+        record_sop_usage(name, success=True, script_dir=ROOT)
+    except Exception: pass
     return _json({'name': name, 'content': content})
 
 
