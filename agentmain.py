@@ -148,6 +148,17 @@ def get_system_prompt():
                 prompt += '\n'.join(lines) + '\n'
     except Exception:
         pass
+    # ── Phase 1: 注入用户偏好 (T1.3) ──
+    try:
+        from memory.preference_learner import _format_preferences_for_prompt
+        pref_text = _format_preferences_for_prompt(script_dir)
+        if pref_text: prompt += '\n' + pref_text + '\n'
+    except Exception: pass
+    # ── Phase 1: 注入错误恢复策略 (T1.4) ──
+    try:
+        from memory.error_recovery import inject_error_recovery
+        prompt = inject_error_recovery(prompt, script_dir)
+    except Exception: pass
     return prompt
 
 class GenericAgent:
@@ -265,6 +276,7 @@ class GenericAgent:
         while True:
             task = self.task_queue.get()
             raw_query, source, images, display_queue = task["query"], task["source"], task.get("images") or [], task["output"]
+            self._current_display_queue = display_queue  # expose to hooks
             raw_query = self._handle_slash_cmd(raw_query, display_queue)
             if raw_query is None:
                 self.task_queue.task_done(); continue
@@ -373,6 +385,16 @@ if __name__ == '__main__':
     agent = GeneraticAgent()
     agent.next_llm(args.llm_no)
     agent.verbose = args.verbose
+    # ── Phase 1: 注册经验提取hook (T1.1) ──
+    try:
+        from memory.experience_extractor import create_experience_hook
+        create_experience_hook(agent)
+    except Exception as _e: print(f'[Init] experience_extractor hook skipped: {_e}')
+    # ── Phase 1: 注册偏好学习hook (T1.2) ──
+    try:
+        from memory.preference_learner import create_preference_hook
+        create_preference_hook(agent)
+    except Exception as _e: print(f'[Init] preference_learner hook skipped: {_e}')
     threading.Thread(target=agent.run, daemon=True).start()
 
     if args.task:

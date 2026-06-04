@@ -7,6 +7,7 @@ if sys.stderr is None: sys.stderr = open(os.devnull, "w")
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from agent_loop import BaseHandler, StepOutcome, json_default
+from error_recovery import record_error, inject_error_recovery
 script_dir = os.path.dirname(os.path.abspath(__file__))
 
 def code_run(code, code_type="python", timeout=60, cwd=None, code_cwd=None, stop_signal=None, maxlen=10000):
@@ -641,6 +642,21 @@ class GenericAgentHandler(BaseHandler):
         injprompt = consume_file(self.parent.task_dir, '_intervene')
         if injkeyinfo: self.working['key_info'] = self.working.get('key_info', '') + f"\n[MASTER] {injkeyinfo}"
         if injprompt: next_prompt += f"\n\n[MASTER] {injprompt}\n"
+        # T1.3.2: 检测tool_result中的错误并记录
+        try:
+            for tr in (tool_results or []):
+                tr_str = str(tr)
+                if any(e in tr_str for e in ['Error', 'Exception', 'Traceback', 'error', 'failed']):
+                    tool_name = ''
+                    if tool_calls:
+                        idx = tool_results.index(tr) if tr in tool_results else 0
+                        tool_name = getattr(tool_calls[min(idx, len(tool_calls)-1)], 'name', '') if tool_calls else ''
+                    record_error(tool_name or 'unknown', tr_str[:500], self.parent.script_dir)
+        except Exception: pass
+        # T1.3.3: 注入错误恢复策略
+        try:
+            next_prompt = inject_error_recovery(next_prompt, self.parent.script_dir)
+        except Exception: pass
         for hook in list(getattr(self.parent, '_turn_end_hooks', {}).values()): hook(locals())  # current readonly
         return next_prompt
 

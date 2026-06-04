@@ -118,6 +118,12 @@ def _pump_queue(ws, dq):
                     delta = full
                     last_len = len(full)
                 _send(ws, {'type': 'stream', 'delta': delta, 'full': full})
+            if 'ws_type' in item:
+                # Pass-through typed WS messages from hooks (experience/preference/error_recovery)
+                msg = {'type': item['ws_type']}
+                if 'payload' in item: msg['payload'] = item['payload']
+                _send(ws, msg)
+                continue
             if 'done' in item:
                 STATE['last_reply_time'] = int(time.time())
                 _send(ws, {'type': 'done', 'payload': item['done']})
@@ -219,6 +225,33 @@ class ChatWS(WebSocket):
                 }})
                 print(f'[webapp] handshake: client={self._client_tag!r} '
                       f'proto={self._client_proto} features={negotiated}')
+                # T1.4.5: 推送memory_stats给前端Status Bar
+                try:
+                    import glob as _glob
+                    _mem_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'memory')
+                    _stats = {
+                        'sop_count': len(_glob.glob(os.path.join(_mem_dir, '*.md'))),
+                        'module_count': len(_glob.glob(os.path.join(_mem_dir, '*.py'))),
+                        'experience_count': 0,
+                        'preference_count': 0,
+                    }
+                    # Count experiences
+                    _exp_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'temp', 'experience.json')
+                    if os.path.exists(_exp_file):
+                        import json as _json
+                        with open(_exp_file, 'r', encoding='utf-8') as _ef:
+                            _edata = _json.load(_ef)
+                            _stats['experience_count'] = len(_edata) if isinstance(_edata, list) else sum(len(v) for v in _edata.values()) if isinstance(_edata, dict) else 0
+                    # Count preferences
+                    _pref_file = os.path.join(_mem_dir, 'preferences.json')
+                    if os.path.exists(_pref_file):
+                        import json as _json
+                        with open(_pref_file, 'r', encoding='utf-8') as _pf:
+                            _pdata = _json.load(_pf)
+                            _stats['preference_count'] = len(_pdata.get('preferences', [])) if isinstance(_pdata, dict) else 0
+                    _send(self, {'type': 'memory_stats', 'payload': _stats})
+                except Exception:
+                    pass  # memory_stats推送失败不影响handshake
             elif t == 'task':
                 payload = msg.get('payload') or {}
                 text = (payload.get('text') or '').strip()
@@ -379,6 +412,12 @@ def _pump_queue_broadcast(dq):
                     delta = full  # stream reset
                 last_len = len(full)
                 _broadcast({'type': 'stream', 'delta': delta, 'full': full})
+            if 'ws_type' in item:
+                # Pass-through typed WS messages from hooks (experience/preference/error_recovery)
+                msg = {'type': item['ws_type']}
+                if 'payload' in item: msg['payload'] = item['payload']
+                _broadcast(msg)
+                continue
             if 'done' in item:
                 STATE['last_reply_time'] = int(time.time())
                 _broadcast({'type': 'done', 'payload': item['done']})

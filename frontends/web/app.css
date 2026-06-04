@@ -2,9 +2,104 @@
    GenericAgent · Custom bits (complements Tailwind)
    ═══════════════════════════════════════════════ */
 
+/* ── T1.4.1 Design Tokens ── */
+:root {
+  /* Surface */
+  --ga-bg-primary: #0d0d0d;
+  --ga-bg-secondary: #1a1a1a;
+  --ga-bg-tertiary: #222222;
+  --ga-bg-elevated: #2a2a2a;
+  /* Border */
+  --ga-border-default: #262626;
+  --ga-border-subtle: rgba(255,255,255,0.06);
+  --ga-border-active: rgba(255,255,255,0.15);
+  /* Text */
+  --ga-text-primary: #e4e4e7;
+  --ga-text-secondary: rgba(255,255,255,0.6);
+  --ga-text-muted: rgba(255,255,255,0.35);
+  /* Brand / Accent */
+  --ga-accent: #4a9eff;
+  --ga-accent-glow: rgba(74,158,255,0.5);
+  --ga-success: #22c55e;
+  --ga-warning: #f59e0b;
+  --ga-error: #ef4444;
+  --ga-info: #3b82f6;
+  /* Memory colors */
+  --ga-memory-exp: #a78bfa;
+  --ga-memory-pref: #f472b6;
+  --ga-memory-sop: #34d399;
+  /* Status dot */
+  --ga-status-active: #22c55e;
+  --ga-status-idle: rgba(255,255,255,0.25);
+  --ga-status-thinking: #f59e0b;
+  --ga-status-error: #ef4444;
+  /* Radius */
+  --ga-radius-sm: 6px;
+  --ga-radius-md: 10px;
+  --ga-radius-lg: 14px;
+  /* Transition */
+  --ga-transition-fast: 0.12s ease;
+  --ga-transition-normal: 0.25s ease;
+}
+
 /* Codex-style clean dark background */
 .app-bg {
-  background: #0d0d0d;
+  background: var(--ga-bg-primary);
+}
+
+/* ── T1.5.1 Header 记忆指示器 ── */
+#header-memory {
+  transition: all var(--ga-transition-fast);
+}
+#header-memory.has-data {
+  color: rgba(255,255,255,0.7);
+}
+
+/* ── T1.5.4 模式切换按钮组 ── */
+.mode-btn {
+  color: rgba(255,255,255,0.35);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  line-height: 1;
+}
+.mode-btn:hover {
+  color: rgba(255,255,255,0.6);
+}
+.mode-btn.active {
+  color: var(--ga-accent);
+  background: rgba(74,158,255,0.15);
+}
+
+/* ── T1.4.3 Status Bar ── */
+#status-bar {
+  font-variant-numeric: tabular-nums;
+}
+#status-dot {
+  transition: background var(--ga-transition-fast), box-shadow var(--ga-transition-fast);
+}
+#status-dot.thinking {
+  background: var(--ga-status-thinking);
+  box-shadow: 0 0 6px rgba(245,158,11,0.5);
+  animation: pulse-dot 1.2s ease-in-out infinite;
+}
+#status-dot.active {
+  background: var(--ga-status-active);
+  box-shadow: 0 0 4px rgba(34,197,94,0.4);
+}
+#status-dot.error {
+  background: var(--ga-status-error);
+  box-shadow: 0 0 4px rgba(239,68,68,0.4);
+}
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(1.4); }
+}
+#status-exp.has-data, #status-pref.has-data {
+  color: var(--ga-text-secondary);
+}
+#status-err.visible {
+  display: flex !important;
 }
 
 /* Codex-style sidebar with subtle glass effect */
@@ -12,7 +107,7 @@
   background: rgba(30,30,30,0.85);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
-  border-right: 1px solid #262626;
+  border-right: 1px solid var(--ga-border-default);
   position: relative;
 }
 .sidebar-glass::before { display: none; }
@@ -164,10 +259,31 @@
   user-select: none;
 }
 .msg-assistant .msg-avatar {
-  background: linear-gradient(135deg, #5aa5ff, #a78bfa, #ec4899);
+  background: linear-gradient(135deg, #5aa5ff, var(--ga-memory-exp), #ec4899);
   color: #fff;
   box-shadow: 0 3px 12px rgba(90,165,255,0.3);
   margin-top: 2px;
+}
+
+/* T1.5.2: 消息气泡记忆badge */
+.mem-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px;
+  margin-top: 4px;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--ga-accent);
+  background: rgba(74,158,255,0.1);
+  border: 1px solid rgba(74,158,255,0.2);
+  border-radius: var(--ga-radius-sm);
+  cursor: default;
+  user-select: none;
+  transition: background var(--ga-transition-fast);
+}
+.mem-badge:hover {
+  background: rgba(74,158,255,0.2);
 }
 
 .msg-body { flex: 1 1 auto; min-width: 0; overflow: hidden; }
@@ -199,7 +315,7 @@
 .msg-content li { margin: 0.15em 0; }
 .msg-content li::marker { color: #707687; }
 .msg-content blockquote {
-  border-left: 3px solid #4a9eff;
+  border-left: 3px solid var(--ga-accent);
   padding: 4px 14px;
   color: #c5c8d3;
   background: rgba(74,158,255,0.06);
@@ -230,8 +346,8 @@
 }
 .msg-content th, .msg-content td { border: 1px solid #2f2f39; padding: 6px 12px; }
 .msg-content th { background: #25252d; font-weight: 600; text-align: left; }
-.msg-content a { color: #4a9eff; text-decoration: none; border-bottom: 1px solid transparent; transition: border-color 0.15s; }
-.msg-content a:hover { border-bottom-color: #4a9eff; }
+.msg-content a { color: var(--ga-accent); text-decoration: none; border-bottom: 1px solid transparent; transition: border-color 0.15s; }
+.msg-content a:hover { border-bottom-color: var(--ga-accent); }
 .msg-content img { max-width: 100%; border-radius: 6px; margin: 6px 0; box-shadow: 0 1px 2px rgba(0,0,0,0.35); }
 .msg-content hr { border: none; border-top: 1px solid #25252d; margin: 14px 0; }
 
@@ -298,7 +414,7 @@
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   font-size: 12px;
 }
-.part-thinking .part-icon { color: #a78bfa; }
+.part-thinking .part-icon { color: var(--ga-memory-exp); }
 .part-tool-use .part-icon, .part-tool-round .part-icon  { color: #60a5fa; display: inline-flex; }
 .part-tool-use .tool-name, .part-tool-round .tool-name, .part-tool-round .tool-names {
   flex: 1; font-family: "JetBrains Mono", monospace;
@@ -413,7 +529,7 @@
 }
 .cursor-blink {
   display: inline-block; width: 7px; height: 14px;
-  background: #4a9eff;
+  background: var(--ga-accent);
   animation: blink 1s step-end infinite;
   vertical-align: text-top; margin-left: 2px; border-radius: 1px;
 }
@@ -699,7 +815,7 @@
   transition: background 0.1s;
 }
 .llm-option:hover { background: #2f2f39; color: #f5f6f8; }
-.llm-option.current { background: rgba(74,158,255,0.12); color: #4a9eff; }
+.llm-option.current { background: rgba(74,158,255,0.12); color: var(--ga-accent); }
 .llm-option .idx { color: #707687; font-size: 10.5px; margin-right: 4px; }
 
 /* ═══════════════════════════════════════════════
@@ -730,7 +846,7 @@
 
 /* Send button — "stopping" state (running) morphs into a red stop */
 #btn-send.stopping {
-  background: linear-gradient(135deg, #ef4444, #dc2626) !important;
+  background: linear-gradient(135deg, var(--ga-error), #dc2626) !important;
   box-shadow: 0 0 0 4px rgba(239,68,68,0.2), 0 6px 18px rgba(239,68,68,0.35);
   animation: pulse-stop 1.6s ease-in-out infinite;
 }
@@ -1243,7 +1359,7 @@ select.cfg-input { cursor: pointer; }
 /* Amber warning box — amber-300/400 are too light on white */
 .theme-light #settings-readonly-warn {
   background: #fffbeb !important;
-  border-color: #f59e0b !important;
+  border-color: var(--ga-warning) !important;
 }
 .theme-light #settings-readonly-warn .text-amber-300 { color: #b45309 !important; }
 .theme-light #settings-readonly-warn .text-amber-400 { color: #d97706 !important; }
@@ -1413,8 +1529,8 @@ select.cfg-input { cursor: pointer; }
 .theme-light [class*="placeholder:text-white"]::placeholder { color: #94a3b8 !important; }
 
 /* ── Hardcoded dark backgrounds ── */
-.theme-light .bg-\[\#1a1a1a\] { background: #f8fafc !important; }
-.theme-light .bg-\[\#2a2a2a\] { background: #fff !important; }
+.theme-light .bg-\[\var(--ga-bg-secondary)\] { background: #f8fafc !important; }
+.theme-light .bg-\[\var(--ga-bg-elevated)\] { background: #fff !important; }
 .theme-light #sidebar-rail { background: #fff !important; border-right: 1px solid rgba(15,23,42,0.08); }
 .theme-light #sidebar-rail .bg-\[\#333\] { background: #e2e8f0 !important; }
 .theme-light #sidebar-rail .bg-\[\#333\]:hover { background: #cbd5e1 !important; }
@@ -1451,7 +1567,7 @@ select.cfg-input { cursor: pointer; }
 /* ── Light theme structural borders (matching Codex #E5E5E5) ── */
 .theme-light .sidebar-glass { border-right-color: #E5E5E5 !important; }
 .theme-light header.border-b { border-bottom-color: #E5E5E5 !important; }
-.theme-light .border-t.border-\[\#262626\] { border-top-color: #E5E5E5 !important; }
+.theme-light .border-t.border-\[\var(--ga-border-default)\] { border-top-color: #E5E5E5 !important; }
 
 /* ── Autonomous toggle ── */
 .theme-light #autonomous-toggle + div { background: rgba(15,23,42,0.12) !important; }

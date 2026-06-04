@@ -14,6 +14,15 @@
   const imageInput = $('image-input');
   const statusDot = $('status-dot');
   const statusText = $('status-text');
+  const statusTurn = $('status-turn');
+  const statusExp = $('status-exp');
+  const statusPref = $('status-pref');
+  const statusErr = $('status-err');
+  const statusTools = $('status-tools');
+  const headerMemory = $('header-memory');
+  const headerMemCount = $('header-mem-count');
+  const modeBtns = document.querySelectorAll('.mode-btn');
+  state.currentMode = 'chat';
   const llmNameEl = $('llm-name');
   const llmSelector = $('llm-selector');
   const llmDropdown = $('llm-dropdown');
@@ -70,9 +79,28 @@
       if (state.viewingSessionPath) returnToActive();
       appendAssistantStream(m.full);
     },
-    on_done: (m) => { finalizeAssistant(m.payload); setRunning(false); refreshSessions(); },
+    on_done: (m) => {
+      // T1.5.2: 提取experience标记
+      if (m.has_experience) { state.lastHasExperience = true; state.lastExperienceIds = m.experience_ids || []; }
+      finalizeAssistant(m.payload); setRunning(false); refreshSessions();
+    },
     on_info: (m) => showToast(m.payload, 'info'),
     on_error: (m) => { showToast(m.payload, 'error'); setRunning(false); },
+    on_experience: (m) => { if (statusExp) { statusExp.classList.add('has-data'); statusExp.title = `经验: ${m.payload?.summary || '已提取'}`; } state.lastHasExperience = true; if (m.payload?.id) { if (!state.lastExperienceIds) state.lastExperienceIds = []; state.lastExperienceIds.push(m.payload.id); } },
+    on_preference: (m) => { if (statusPref) { statusPref.classList.add('has-data'); statusPref.title = `偏好: ${m.payload?.key || '已学习'}`; } },
+    on_error_recovery: (m) => { if (statusErr) { statusErr.classList.add('visible'); statusErr.title = `恢复: ${m.payload?.strategy || '已激活'}`; } },
+    on_memory_stats: (m) => {
+      const p = m.payload || {};
+      if (statusExp) { statusExp.textContent = `🧠${p.experience_count || 0}`; statusExp.title = `经验: ${p.experience_count || 0}条`; if (p.experience_count > 0) statusExp.classList.add('has-data'); }
+      if (statusPref) { statusPref.textContent = `⚙️${p.preference_count || 0}`; statusPref.title = `偏好: ${p.preference_count || 0}条`; if (p.preference_count > 0) statusPref.classList.add('has-data'); }
+      // T1.5.1: 同步更新Header记忆指示器
+      if (headerMemCount) {
+        const exp = p.experience_count || 0;
+        const pref = p.preference_count || 0;
+        headerMemCount.textContent = `${exp + pref}`;
+        if (headerMemory) headerMemory.classList.toggle('has-data', exp + pref > 0);
+      }
+    },
     on_auto_user: (m) => {
       if (state.viewingSessionPath) returnToActive();
       // Autonomous task fired (idle-monitor or manual). Show a user bubble + prep assistant area.
@@ -474,6 +502,17 @@
     API.send('action', { name: 'autonomous_toggle' });
   });
 
+  /* ═══ T1.5.4 Mode Switch ═══ */
+  modeBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const mode = btn.dataset.mode;
+      if (!mode || mode === state.currentMode) return;
+      state.currentMode = mode;
+      modeBtns.forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
+      API.send('mode_change', { mode });
+    });
+  });
+
   /* ═════ New chat ═════ */
   $('btn-new-chat').addEventListener('click', newChat);
   $('rail-new-chat').addEventListener('click', newChat);
@@ -584,6 +623,16 @@
     const segs = foldTurns(fullText);
     state.pendingAssistant.innerHTML = renderSegments(segs);
     attachTurnHandlers(state.pendingAssistant);
+    // T1.5.2: 记忆badge
+    if (state.lastHasExperience) {
+      const badge = document.createElement('span');
+      badge.className = 'mem-badge';
+      badge.textContent = '📎 记忆';
+      badge.title = (state.lastExperienceIds || []).join(', ');
+      state.pendingAssistant.parentElement.appendChild(badge);
+      state.lastHasExperience = false;
+      state.lastExperienceIds = [];
+    }
     state.pendingAssistant.classList.remove('streaming');
     state.pendingAssistant = null;
     scrollToBottom();
