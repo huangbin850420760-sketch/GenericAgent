@@ -124,6 +124,26 @@
       const p = m.payload || {};
       showToast(`🔌 MCP推荐: ${p.tool_name || ''} - ${p.reason || ''}`, 'info');
     },
+    // ── T4.1: Execution preview approval ──
+    on_execution_preview: (m) => {
+      const p = m.payload || {};
+      showPreviewPanel(p);
+    },
+    // ── T4.2: Execution step timeline (throttled 500ms) ──
+    _stepQueue: [],
+    _stepTimer: null,
+    on_execution_step: (m) => {
+      const p = m.payload || {};
+      if (!state._stepQueue) state._stepQueue = [];
+      state._stepQueue.push(p);
+      if (!state._stepTimer) {
+        state._stepTimer = setTimeout(() => {
+          const batch = state._stepQueue.splice(0);
+          state._stepTimer = null;
+          batch.forEach(s => appendTimelineStep(s));
+        }, 500);
+      }
+    },
   });
 
   /* ═════ Status ═════ */
@@ -658,6 +678,19 @@
         if (msgEl) injectToolFlow(msgEl, toolCalls);
       }
     } catch(_e) { /* Tool Flow非关键，静默失败 */ }
+    // T4.4.1: Micro-interaction animations
+    try {
+      const msgEl = state.pendingAssistant.closest('.msg') || state.pendingAssistant.parentElement;
+      if (msgEl) {
+        msgEl.classList.add('anim-msg-fade-in');
+        msgEl.addEventListener('animationend', () => msgEl.classList.remove('anim-msg-fade-in'), { once: true });
+        // Tool node pulse
+        msgEl.querySelectorAll('.tool-flow-node').forEach(n => {
+          n.classList.add('anim-tool-pulse');
+          n.addEventListener('animationend', () => n.classList.remove('anim-tool-pulse'), { once: true });
+        });
+      }
+    } catch(_e2) {}
     state.pendingAssistant = null;
     scrollToBottom();
   }
@@ -1405,6 +1438,12 @@
     const cls = kind === 'error' ? ' error' : kind === 'success' ? ' success' : '';
     t.className = 'info-toast' + cls;
     t.textContent = text;
+    // T4.4.1: error toast shake animation
+    if (kind === 'error') {
+      t.classList.add('anim-shake-error');
+    } else if (kind === 'success') {
+      t.classList.add('anim-bounce-check');
+    }
     document.body.appendChild(t);
     setTimeout(() => {
       t.style.transition = 'opacity 0.3s, transform 0.3s';
@@ -1416,9 +1455,8 @@
   /* ═════ Theme toggle (light/dark) ═════ */
   function applyTheme(theme) {
     const root = document.documentElement;
+    root.setAttribute('data-theme', theme);
     const isLight = theme === 'light';
-    root.classList.toggle('theme-light', isLight);
-    root.classList.toggle('theme-dark', !isLight);
     document.querySelectorAll('.theme-icon-dark')
       .forEach(el => el.classList.toggle('hidden', isLight));
     document.querySelectorAll('.theme-icon-light')
@@ -2098,14 +2136,23 @@
     if (ctxMemStats.l3 && data.l3 !== undefined) ctxMemStats.l3.textContent = data.l3;
   }
 
-  // ── Active Memories ──
+  // ── Active Memories (T4.4.3: virtual scroll / pagination) ──
+  const _memPage = { items: [], page: 1, pageSize: 20 };
   function renderActiveMemories(memories) {
     if (!ctxActiveMemories) return;
     if (!memories || memories.length === 0) {
       ctxActiveMemories.innerHTML = '<div class="text-[10px] text-white/25 text-center py-1">暂无激活的记忆</div>';
       return;
     }
-    ctxActiveMemories.innerHTML = memories.map(m => {
+    _memPage.items = memories;
+    _memPage.page = 1;
+    _renderMemPage();
+  }
+  function _renderMemPage() {
+    const { items, page, pageSize } = _memPage;
+    const end = Math.min(page * pageSize, items.length);
+    const slice = items.slice(0, end);
+    ctxActiveMemories.innerHTML = slice.map(m => {
       const icon = m.type === 'sop' ? '📋' : m.type === 'fact' ? '💡' : '📌';
       const color = m.type === 'sop' ? 'bg-amber-500/20 text-amber-400' : m.type === 'fact' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-brand-500/20 text-brand-400';
       return `<div class="ctx-mem-card" title="${escHtml(m.text)}">
@@ -2113,6 +2160,15 @@
         <span class="ctx-mem-text">${escHtml(m.text)}</span>
       </div>`;
     }).join('');
+    if (end < items.length) {
+      const remaining = items.length - end;
+      ctxActiveMemories.insertAdjacentHTML('beforeend',
+        `<button class="ctx-mem-loadmore text-[10px] text-brand-400 hover:text-brand-300 py-1 w-full text-center cursor-pointer bg-transparent border border-dashed border-white/10 rounded mt-1">加载更多 (${remaining}条)</button>`);
+      ctxActiveMemories.querySelector('.ctx-mem-loadmore')?.addEventListener('click', () => {
+        _memPage.page++;
+        _renderMemPage();
+      });
+    }
   }
 
   // ── Experience Search ──
@@ -2460,4 +2516,188 @@
   window.downloadSophub = downloadSophub;
   window.sophubGo = sophubGo;
   window.sophubSearch = sophubSearch;
+
+  // ── T4.1: Execution Preview Panel ──
+  function showPreviewPanel(preview) {
+    // Remove existing panel if any
+    const old = document.getElementById('preview-panel');
+    if (old) old.remove();
+
+    const panel = document.createElement('div');
+    panel.id = 'preview-panel';
+    panel.className = 'preview-panel';
+    const steps = (preview.steps || []).map((s, i) =>
+      `<div class="preview-step"><span class="step-num">${i + 1}</span><span class="step-text">${escHtml(s)}</span></div>`
+    ).join('');
+    const riskColor = { low: '#4ade80', medium: '#fbbf24', high: '#f87171' }[preview.risk_level] || '#94a3b8';
+
+    panel.innerHTML = `
+      <div class="preview-header">
+        <span class="preview-icon">🔍</span> 自主行为预览
+        <button class="preview-close" onclick="this.closest('#preview-panel').remove()">✕</button>
+      </div>
+      <div class="preview-body">
+        <div class="preview-meta">
+          <span class="risk-badge" style="background:${riskColor}">风险: ${preview.risk_level || '未知'}</span>
+          <span class="impact-badge">影响: ${preview.impact || '未知'}</span>
+        </div>
+        <div class="preview-steps">${steps || '<div class="preview-step">无详细步骤</div>'}</div>
+      </div>
+      <div class="preview-actions">
+        <button class="btn-approve" onclick="window._previewRespond(true)">✅ 批准执行</button>
+        <button class="btn-reject" onclick="window._previewRespond(false)">❌ 拒绝</button>
+      </div>`;
+    document.body.appendChild(panel);
+    // Store preview id for response
+    panel.dataset.previewId = preview.id || '';
+  }
+
+  function escHtml(s) {
+    const d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+  }
+
+  window._previewRespond = function(approved) {
+    const panel = document.getElementById('preview-panel');
+    if (!panel) return;
+    const pid = panel.dataset.previewId;
+    wsSend({ type: 'preview_response', payload: { id: pid, approved } });
+    panel.innerHTML = approved
+      ? '<div class="preview-result approved">✅ 已批准，正在执行...</div>'
+      : '<div class="preview-result rejected">❌ 已拒绝</div>';
+    setTimeout(() => panel.remove(), approved ? 1500 : 800);
+  };
+
+  // ── T4.2.5: Trust Level Selector ──
+  function initTrustLevel() {
+    const saved = localStorage.getItem('ga_trust_level');
+    if (saved !== null) {
+      wsSend({ type: 'set_trust_level', payload: { level: parseInt(saved) } });
+    }
+    // Add trust indicator to status bar
+    const bar = document.getElementById('status-bar');
+    if (bar && !document.getElementById('trust-indicator')) {
+      const ti = document.createElement('span');
+      ti.id = 'trust-indicator';
+      ti.className = 'trust-indicator';
+      ti.innerHTML = `🔒 <select id="trust-select" onchange="window._setTrust(this.value)">
+        <option value="0">L0 完全信任</option>
+        <option value="1">L1 预览提示</option>
+        <option value="2">L2 需批准</option>
+        <option value="3">L3 只读</option>
+      </select>`;
+      bar.appendChild(ti);
+      if (saved !== null) document.getElementById('trust-select').value = saved;
+    }
+  }
+  window._setTrust = function(level) {
+    localStorage.setItem('ga_trust_level', level);
+    wsSend({ type: 'set_trust_level', payload: { level: parseInt(level) } });
+  };
+  initTrustLevel();
+
+  // ── T4.2: Execution Timeline Monitor ──
+  function _getOrCreateTimeline() {
+    let tl = document.getElementById('exec-timeline');
+    if (tl) return tl;
+    // Find sidebar panel for timeline
+    const sidebar = document.querySelector('.sidebar') || document.querySelector('#sidebar');
+    if (!sidebar) { console.warn('[timeline] no sidebar found'); return null; }
+    // Create timeline container
+    const section = document.createElement('div');
+    section.id = 'exec-timeline-section';
+    section.className = 'exec-timeline-section';
+    section.innerHTML = `<div class="exec-tl-header"><span>📡 执行监控</span><button class="exec-tl-clear" onclick="window._clearTimeline()">✕</button></div><div id="exec-timeline" class="exec-timeline"></div>`;
+    sidebar.appendChild(section);
+    return document.getElementById('exec-timeline');
+  }
+  window._clearTimeline = function() {
+    const tl = document.getElementById('exec-timeline');
+    if (tl) tl.innerHTML = '';
+  };
+
+  function appendTimelineStep(step) {
+    const tl = _getOrCreateTimeline();
+    if (!tl) return;
+    const statusColors = { running: '#fbbf24', success: '#34d399', error: '#f87171' };
+    const statusIcons = { running: '⏳', success: '✅', error: '❌' };
+    const color = statusColors[step.status] || '#64748b';
+    const icon = statusIcons[step.status] || '⚪';
+    const el = document.createElement('div');
+    el.className = 'exec-tl-node';
+    el.setAttribute('data-step', step.step || 0);
+    const durText = step.duration ? ` (${(step.duration / 1000).toFixed(1)}s)` : '';
+    el.innerHTML = `
+      <div class="exec-tl-dot" style="background:${color}"></div>
+      <div class="exec-tl-content">
+        <div class="exec-tl-title">${icon} ${step.tool || '?'}${durText}</div>
+        ${step.result_summary ? `<div class="exec-tl-summary">${step.result_summary.substring(0, 120)}</div>` : ''}
+        <div class="exec-tl-detail" style="display:none">
+          <div class="exec-tl-detail-inner">
+            ${step.args ? `<div class="exec-tl-row"><b>Input:</b> <code>${JSON.stringify(step.args).substring(0, 500)}</code></div>` : ''}
+            ${step.result_summary ? `<div class="exec-tl-row"><b>Result:</b> <span>${step.result_summary}</span></div>` : ''}
+            <div class="exec-tl-row"><b>Time:</b> ${new Date(step.timestamp).toLocaleTimeString()}</div>
+          </div>
+        </div>
+      </div>`;
+    // Click to expand detail (T4.2.3)
+    el.addEventListener('click', () => {
+      const det = el.querySelector('.exec-tl-detail');
+      if (det) det.style.display = det.style.display === 'none' ? 'block' : 'none';
+    });
+    tl.appendChild(el);
+    // Auto-scroll
+    const section = document.getElementById('exec-timeline-section');
+    if (section) section.scrollTop = section.scrollHeight;
+    // Limit nodes to 100
+    while (tl.children.length > 100) tl.removeChild(tl.firstChild);
+  }
+
+  // ── T4.3.4: Capability Report ──
+  function _renderCapCards(report) {
+    const container = document.getElementById('capability-report-cards');
+    if (!container || !report) return;
+    container.classList.remove('hidden');
+    const sections = [
+      { key: 'tools', label: '🔧 工具', icon: 'wrench', color: 'brand' },
+      { key: 'mcp_servers', label: '🌐 MCP 服务', icon: 'globe', color: 'accent-violet' },
+      { key: 'sops', label: '📖 SOP', icon: 'book-open', color: 'accent-pink' },
+      { key: 'devices', label: '📱 设备', icon: 'smartphone', color: 'emerald' },
+      { key: 'memory_layers', label: '🧠 记忆层', icon: 'brain', color: 'amber' },
+    ];
+    let html = '';
+    for (const s of sections) {
+      const items = report[s.key] || [];
+      if (!items.length && s.key !== 'memory_layers') continue;
+      const count = s.key === 'memory_layers' ? (report.memory_layers_count || 0) : items.length;
+      html += `<div class="rounded-xl bg-white/4 border border-white/8 p-4">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-[13px] font-semibold text-frost-100">${s.label}</span>
+          <span class="text-[11px] px-2 py-0.5 rounded-full bg-${s.color}-400/15 text-${s.color}-300">${count}</span>
+        </div>
+        <div class="flex flex-wrap gap-1.5">${items.map(i =>
+          `<span class="text-[11px] px-2 py-0.5 rounded-md bg-white/6 text-frost-300">${typeof i === 'string' ? i : i.name || i.title || JSON.stringify(i)}</span>`
+        ).join('')}</div>
+      </div>`;
+    }
+    container.innerHTML = html || '<p class="text-frost-400 text-[12px]">暂无能力数据</p>';
+  }
+
+  // WS handler for capability_report_result
+  wsHandlers['capability_report_result'] = function(payload) {
+    _renderCapCards(payload);
+  };
+
+  // Button click
+  document.getElementById('btn-capability-report')?.addEventListener('click', function() {
+    this.disabled = true;
+    this.innerHTML = '<span class="animate-spin inline-block w-4 h-4 border-2 border-frost-300 border-t-transparent rounded-full"></span> 扫描中...';
+    wsSend({ type: 'capability_report' });
+    setTimeout(() => {
+      this.disabled = false;
+      this.innerHTML = '<i data-lucide="scan" class="w-4 h-4"></i>扫描当前能力';
+      if (window.lucide) lucide.createIcons();
+    }, 2000);
+  });
 })();

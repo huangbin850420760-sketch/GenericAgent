@@ -159,6 +159,12 @@ def get_system_prompt():
         from memory.error_recovery import inject_error_recovery
         prompt = inject_error_recovery(prompt, script_dir)
     except Exception: pass
+    # ── Phase 4: 注入能力边界自声明 (T4.3.2) ──
+    try:
+        from capability_reporter import get_capability_summary_text
+        cap_text = get_capability_summary_text()
+        if cap_text: prompt += '\n' + cap_text + '\n'
+    except Exception: pass
     # ── Phase 2: 注入跨会话经验检索 (T2.1) ──
     try:
         from memory.experience_index import search as exp_search

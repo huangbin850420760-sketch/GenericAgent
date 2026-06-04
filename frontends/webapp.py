@@ -92,12 +92,71 @@ if agent.llmclient is None:
 threading.Thread(target=agent.run, daemon=True).start()
 print(f"[webapp] Agent initialized, LLM: {agent.get_llm_name()}")
 
+# ── T4.2.1: Register turn_end_hook to push execution_step via WS ──
+_step_counter = [0]
+_last_step_time = [0.0]
+
+def _execution_step_hook(locals_dict):
+    """Push execution_step WS messages on each tool call completion."""
+    try:
+        tool_calls = locals_dict.get('tool_calls') or []
+        tool_results = locals_dict.get('tool_results') or []
+        turn = locals_dict.get('turn', 0)
+        if not tool_calls:
+            return
+        now = time.time()
+        # T4.2.1-fix: duration = time since last step (approximate per-tool execution time)
+        duration = round(now - _last_step_time[0], 3) if _last_step_time[0] > 0 else None
+        # T4.2.4: Throttle - skip if < 500ms since last push
+        if now - _last_step_time[0] < 0.5:
+            return
+        _last_step_time[0] = now
+        for idx, tc in enumerate(tool_calls):
+            _step_counter[0] += 1
+            tool_name = getattr(tc, 'name', '') if hasattr(tc, 'name') else tc.get('tool_name', '')
+            tool_args = getattr(tc, 'args', {}) if hasattr(tc, 'args') else tc.get('args', {})
+            tr = tool_results[idx] if idx < len(tool_results) else None
+            status = 'success'
+            result_summary = ''
+            if tr is not None:
+                if isinstance(tr, dict):
+                    is_error = tr.get('is_error', False) or tr.get('status') == 'error'
+                    result_summary = str(tr.get('content', ''))[:200]
+                    status = 'error' if is_error else 'success'
+                else:
+                    result_summary = str(tr)[:200]
+            payload = {
+                'step': _step_counter[0],
+                'tool': tool_name,
+                'status': status,
+                'args_summary': str({k: (str(v)[:50]+'...' if len(str(v))>50 else v) for k,v in tool_args.items()})[:300],
+                'result_summary': result_summary,
+                'timestamp': int(now * 1000),
+            }
+            if duration is not None:
+                payload['duration'] = duration
+            _broadcast({'type': 'execution_step', 'payload': payload})
+    except Exception as e:
+        print(f'[webapp] execution_step_hook error: {e}')
+
+if not hasattr(agent, '_turn_end_hooks'):
+    agent._turn_end_hooks = {}
+agent._turn_end_hooks['execution_step'] = _execution_step_hook
+
 # ───────── Global UI state ─────────
 STATE = {
     'last_reply_time': int(time.time()),
     'autonomous_enabled': False,
     'pet_proc': None,
 }
+# T4.3.5: Load persisted trust level on startup
+try:
+    _tc_path = os.path.join(script_dir, 'memory', 'trust_config.json')
+    if os.path.isfile(_tc_path):
+        with open(_tc_path, 'r', encoding='utf-8') as _tf:
+            STATE['trust_level'] = json.load(_tf).get('trust_level', 0)
+except Exception:
+    pass
 
 
 def _pump_queue(ws, dq):
@@ -307,6 +366,31 @@ class ChatWS(WebSocket):
                                             else '✅ Bypass 已关闭：风险动作恢复审批'})
                 except Exception as e:
                     _send(self, {'type': 'error', 'payload': f'set_bypass: {e}'})
+            # ── T4.1: Preview approval response ──
+            elif t == 'preview_response':
+                payload = msg.get('payload') or {}
+                pid = payload.get('id', '')
+                approved = bool(payload.get('approved', False))
+                with _preview_lock:
+                    info = _preview_state.get(pid)
+                    if info:
+                        info['approved'] = approved
+                        info['event'].set()
+                    else:
+                        _send(self, {'type': 'error', 'payload': f'预览ID {pid} 不存在或已过期'})
+            # ── T4.1: Set trust level (L0 full trust → L3 readonly) ──
+            elif t == 'set_trust_level':
+                level = int((msg.get('payload') or {}).get('level', 0))
+                level = max(0, min(3, level))
+                STATE['trust_level'] = level
+                # T4.3.5: Persist trust level to file
+                try:
+                    _tc_path = os.path.join(script_dir, 'memory', 'trust_config.json')
+                    with open(_tc_path, 'w', encoding='utf-8') as _tf:
+                        json.dump({'trust_level': level}, _tf)
+                except Exception: pass
+                _broadcast_status()
+                _send(self, {'type': 'info', 'payload': f'🔒 信任等级已设为 L{level}'})
             elif t == 'context':
                 # IDE pushed editor state (active file, selection, open files, root).
                 ide_bridge.set_context(msg.get('payload') or {})
@@ -517,6 +601,14 @@ def _do_action(ws, payload):
             _broadcast_status()
         except Exception as e:
             _send(ws, {'type': 'error', 'payload': f'恢复失败: {e}'})
+    # ── T4.3.3+T4.3.4b: Capability report ──
+    elif name == 'capability_report':
+        try:
+            from capability_reporter import get_capability_report
+            report = get_capability_report()
+            _send(ws, {'type': 'capability_report_result', 'payload': report})
+        except Exception as e:
+            _send(ws, {'type': 'error', 'payload': f'能力报告生成失败: {e}'})
 
 
 # ───────── Autonomous trigger (manual + idle) ─────────
@@ -560,8 +652,13 @@ def _pump_queue_broadcast(dq):
         _broadcast({'type': 'error', 'payload': f'pump error: {e}'})
 
 
+# ── T4.1: Preview approval state ──
+_preview_lock = threading.Lock()
+_preview_state = {}   # {id: {prompt, event(threading.Event), approved(bool)}}
+
 def _trigger_autonomous(source='auto'):
-    """Broadcast a synthetic user message + pump the resulting stream to all clients."""
+    """Broadcast a synthetic user message + pump the resulting stream to all clients.
+    T4.1: With trust_level >= 2, send execution_preview for approval first."""
     global _last_auto_trigger
     with _auto_lock:
         if agent.is_running:
@@ -570,9 +667,37 @@ def _trigger_autonomous(source='auto'):
         _last_auto_trigger = time.time()
     try:
         print(f'[webapp] triggering autonomous task ({source})')
-        # 1) Show the synthetic user message in every client
+        # T4.1: Check trust level for preview approval
+        trust_level = int(STATE.get('trust_level', 0))
+        if trust_level >= 2:
+            import uuid
+            preview_id = str(uuid.uuid4())[:8]
+            approval_event = threading.Event()
+            with _preview_lock:
+                _preview_state[preview_id] = {
+                    'prompt': AUTO_PROMPT, 'event': approval_event, 'approved': False
+                }
+            # Send preview to all clients for approval
+            _broadcast({'type': 'execution_preview', 'payload': {
+                'id': preview_id,
+                'steps': [{'desc': AUTO_PROMPT[:200], 'tool': 'agent'}],
+                'risk_level': 'low' if trust_level < 3 else 'medium',
+                'impact': f'自主触发({source})',
+                'source': source,
+            }})
+            # Wait for approval (timeout 60s)
+            if not approval_event.wait(timeout=60):
+                with _preview_lock:
+                    _preview_state.pop(preview_id, None)
+                _broadcast({'type': 'info', 'payload': '⏱ 预览批准超时，已取消'})
+                return
+            with _preview_lock:
+                info = _preview_state.pop(preview_id, {})
+                if not info.get('approved'):
+                    _broadcast({'type': 'info', 'payload': '🚫 用户已拒绝执行'})
+                    return
+        # Execute the task
         _broadcast({'type': 'auto_user', 'payload': AUTO_PROMPT})
-        # 2) Actually dispatch it and pump stream back to everyone
         dq = agent.put_task(AUTO_PROMPT, source=f'webapp_{source}')
         threading.Thread(target=_pump_queue_broadcast, args=(dq,), daemon=True).start()
         STATE['last_reply_time'] = int(time.time())
@@ -922,6 +1047,43 @@ def _sche_delete(name):
         os.remove(path)
         return {'ok': True}
     response.status = 404; return {'error': 'not found'}
+
+# T4.1.5: Scheduler run with preview approval
+@app.route('/api/scheduler/run/<name>')
+def _sche_run(name):
+    """Trigger a scheduler task with preview approval flow."""
+    path = os.path.join(_SCHE_DIR, f'{name}.json')
+    if not os.path.isfile(path):
+        response.status = 404; return {'error': 'not found'}
+    d = json.loads(open(path, encoding='utf-8').read())
+    prompt = d.get('prompt', '').strip()
+    if not prompt:
+        return {'error': 'task has no prompt'}
+    # Check trust level for preview requirement
+    trust = _load_trust()
+    if trust < 3:
+        # Build preview and broadcast for approval
+        import uuid
+        pid = str(uuid.uuid4())[:8]
+        event = threading.Event()
+        with _preview_lock:
+            _preview_state[pid] = {'prompt': prompt, 'event': event, 'approved': False}
+        _broadcast({'type': 'execution_preview', 'payload': {
+            'id': pid, 'steps': [{'step': 1, 'tool': 'scheduler', 'action': prompt[:200]}],
+            'risk_level': 'medium', 'source': f'scheduler:{name}',
+            'impact': f'将执行定时任务「{name}」'
+        }})
+        # Wait up to 120s for approval
+        if not event.wait(timeout=120):
+            with _preview_lock: _preview_state.pop(pid, None)
+            return {'error': 'preview timeout'}
+        with _preview_lock: info = _preview_state.pop(pid, None)
+        if not info or not info.get('approved'):
+            return {'error': 'rejected by user'}
+    # Execute the task
+    dq = agent.put_task(prompt, source=f'webapp_scheduler:{name}')
+    threading.Thread(target=_pump_queue_broadcast, args=(dq,), daemon=True).start()
+    return {'ok': True, 'name': name}
 
 @app.route('/api/scheduler/reports')
 def _sche_done():

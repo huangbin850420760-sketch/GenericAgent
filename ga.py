@@ -657,6 +657,13 @@ class GenericAgentHandler(BaseHandler):
         try:
             next_prompt = inject_error_recovery(next_prompt, self.parent.script_dir)
         except Exception: pass
+        # T4.3.2: Inject [My Capabilities] summary into next_prompt every 10 turns
+        try:
+            if turn % 10 == 0:
+                from capability_reporter import get_capability_summary_text
+                cap_summary = get_capability_summary_text()
+                next_prompt += f"\n\n{cap_summary}"
+        except Exception: pass
         for hook in list(getattr(self.parent, '_turn_end_hooks', {}).values()): hook(locals())  # current readonly
         return next_prompt
 
