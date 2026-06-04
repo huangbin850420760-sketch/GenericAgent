@@ -185,6 +185,15 @@ def get_system_prompt():
             if hint:
                 prompt += '\n' + hint + '\n'
     except Exception: pass
+    # ── Phase 3: 注入MCP工具推荐 (T3.3) ──
+    try:
+        from memory.mcp_recommender import format_recommendation_hint
+        _hist = getattr(get_system_prompt, '_last_history', [])
+        if _hist:
+            rec_hint = format_recommendation_hint(_hist[-1], script_dir=script_dir)
+            if rec_hint:
+                prompt += '\n' + rec_hint + '\n'
+    except Exception: pass
     return prompt
 
 class GenericAgent:
@@ -438,6 +447,22 @@ if __name__ == '__main__':
         from memory.tool_chain_registry import create_tool_chain_hook
         create_tool_chain_hook(agent)
     except Exception as _e: print(f'[Init] tool_chain hook skipped: {_e}')
+    # ── Phase 3: 注册模式检测hook (T3.1) ──
+    try:
+        from memory.pattern_detector import create_pattern_detector_hook
+        create_pattern_detector_hook(agent)
+    except Exception as _e: print(f'[Init] pattern_detector hook skipped: {_e}')
+    # ── Phase 3: 注册SOP使用追踪hook (T3.2) ──
+    try:
+        from memory.sop_tracker import create_sop_tracker_hook
+        create_sop_tracker_hook(agent)
+    except Exception as _e: print(f'[Init] sop_tracker hook skipped: {_e}')
+    # ── Phase 3: 注册MCP工具推荐 (T3.3) ──
+    try:
+        from memory.mcp_recommender import format_recommendation_hint, record_adoption
+        # 推荐提示将在get_system_prompt中动态注入
+        agent._mcp_recommender_available = True
+    except Exception as _e: print(f'[Init] mcp_recommender skipped: {_e}')
     threading.Thread(target=agent.run, daemon=True).start()
 
     if args.task:

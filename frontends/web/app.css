@@ -1756,4 +1756,46 @@ select.cfg-input { cursor: pointer; }
 .theme-light .ctx-exp-card .ctx-exp-summary { color: #475569; }
 .theme-light .ctx-pref-tag { background: rgba(0,122,204,0.08); border-color: rgba(0,122,204,0.15); color: #475569; }
 
+/* ═════ T3.4.1: Tool Flow SVG 可视化 ═════ */
+.tool-flow-container {
+  margin: 8px 0;
+  padding: 8px 12px;
+  background: rgba(15,23,42,0.3);
+  border: 1px solid rgba(100,116,139,0.2);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.tool-flow-container:hover { border-color: rgba(100,116,139,0.4); }
+.tool-flow-label {
+  font-size: 12px;
+  color: #94a3b8;
+  margin-bottom: 6px;
+  font-weight: 500;
+}
+.tool-flow-svg {
+  display: block;
+  max-width: 100%;
+  overflow: visible;
+}
+.tool-flow-collapsed .tool-flow-svg {
+  max-height: 44px;
+  overflow: hidden;
+}
+.tool-flow-collapsed:hover .tool-flow-svg { max-height: none; }
+
+/* ═════ T3.4.4: 响应式断点 ═════ */
+:root[data-layout="three-col"] .main-content { display: grid; grid-template-columns: 1fr 320px; }
+:root[data-layout="three-col"] .right-panel { display: flex; }
+:root[data-layout="two-col"] .right-panel { display: none; }
+:root[data-layout="two-col"] .right-panel.panel-hidden { display: none; }
+:root[data-layout="two-col"] .main-content { grid-template-columns: 1fr; }
+:root[data-layout="single-col"] .right-panel { display: none; }
+:root[data-layout="single-col"] .sidebar { display: none; }
+:root[data-layout="single-col"] .main-content { grid-template-columns: 1fr; }
+:root[data-layout="single-col"] .mobile-menu-btn { display: block; }
+
+/* Light theme for T3.4 */
+.theme-light .tool-flow-container { background: rgba(15,23,42,0.04); border-color: rgba(15,23,42,0.08); }
+.theme-light .tool-flow-label { color: #64748b; }
 

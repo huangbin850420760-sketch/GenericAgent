@@ -109,6 +109,21 @@
       setRunning(true);
       showToast('🤖 自主行动已触发', 'info');
     },
+    // ── T3 WS handlers: SOP suggestion / SOP stats / MCP recommend ──
+    on_sop_suggestion: (m) => {
+      const p = m.payload || {};
+      showToast(`💡 SOP建议: ${p.pattern || ''} (${p.count || 0}次)`, 'info');
+    },
+    on_sop_stats: (m) => {
+      const p = m.payload || {};
+      if (statusExp) {
+        statusExp.title = `SOP统计: ${p.total || 0}个, 成功率${p.success_rate || 0}%`;
+      }
+    },
+    on_mcp_recommend: (m) => {
+      const p = m.payload || {};
+      showToast(`🔌 MCP推荐: ${p.tool_name || ''} - ${p.reason || ''}`, 'info');
+    },
   });
 
   /* ═════ Status ═════ */
@@ -634,6 +649,15 @@
       state.lastExperienceIds = [];
     }
     state.pendingAssistant.classList.remove('streaming');
+    // T3.4.2: 注入Tool Flow SVG可视化
+    try {
+      const toolRe = /\*{0,2}(file_read|file_patch|file_write|code_run|web_scan|web_execute_js|mcp_tool|update_working_checkpoint|start_long_term_update|ask_user)\b/gi;
+      const toolCalls = [...new Set((fullText.match(toolRe) || []))];
+      if (toolCalls.length > 0) {
+        const msgEl = state.pendingAssistant.closest('.msg') || state.pendingAssistant.parentElement;
+        if (msgEl) injectToolFlow(msgEl, toolCalls);
+      }
+    } catch(_e) { /* Tool Flow非关键，静默失败 */ }
     state.pendingAssistant = null;
     scrollToBottom();
   }
@@ -2252,12 +2276,184 @@
     });
   }
 
+  /* ═════ T3.4.1+T3.4.2: Tool Flow SVG 可视化 ═════ */
+  const TOOL_FLOW_MAX = 50; // 最大显示节点数
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+
+  function buildToolFlowSVG(toolCalls) {
+    if (!toolCalls || !toolCalls.length) return null;
+    const display = toolCalls.slice(0, TOOL_FLOW_MAX);
+    const hasMore = toolCalls.length > TOOL_FLOW_MAX;
+    const nodeW = 100, nodeH = 36, gapX = 24, gapY = 8;
+    const cols = Math.min(display.length, 5);
+    const rows = Math.ceil(display.length / cols);
+    const svgW = cols * (nodeW + gapX) + gapX;
+    const svgH = rows * (nodeH + gapY) + gapY + (hasMore ? 24 : 0);
+
+    const svg = document.createElementNS(SVG_NS, 'svg');
+    svg.setAttribute('class', 'tool-flow-svg');
+    svg.setAttribute('width', '100%');
+    svg.setAttribute('viewBox', `0 0 ${svgW} ${svgH}`);
+
+    // 状态颜色
+    const statusColor = (s) => {
+      if (s === 'success' || s === 'completed') return '#22c55e';
+      if (s === 'error' || s === 'failed') return '#ef4444';
+      if (s === 'running' || s === 'in_progress') return '#3b82f6';
+      return '#6b7280'; // pending/unknown
+    };
+
+    display.forEach((tc, i) => {
+      const col = i % cols, row = Math.floor(i / cols);
+      const x = gapX + col * (nodeW + gapX);
+      const y = gapY + row * (nodeH + gapY);
+      const color = statusColor(tc.status || tc.state || 'success');
+
+      // 连线到下一个节点
+      if (i < display.length - 1) {
+        const nCol = (i + 1) % cols, nRow = Math.floor((i + 1) / cols);
+        const nx = gapX + nCol * (nodeW + gapX) + nodeW / 2;
+        const ny = gapY + nRow * (nodeH + gapY) + nodeH / 2;
+        const line = document.createElementNS(SVG_NS, 'line');
+        line.setAttribute('x1', x + nodeW); line.setAttribute('y1', y + nodeH / 2);
+        line.setAttribute('x2', nx); line.setAttribute('y2', ny);
+        line.setAttribute('stroke', '#334155'); line.setAttribute('stroke-width', '1.5');
+        line.setAttribute('stroke-dasharray', '4,2');
+        svg.appendChild(line);
+      }
+
+      // 节点圆角矩形
+      const rect = document.createElementNS(SVG_NS, 'rect');
+      rect.setAttribute('x', x); rect.setAttribute('y', y);
+      rect.setAttribute('width', nodeW); rect.setAttribute('height', nodeH);
+      rect.setAttribute('rx', '8'); rect.setAttribute('fill', '#1e293b');
+      rect.setAttribute('stroke', color); rect.setAttribute('stroke-width', '1.5');
+      svg.appendChild(rect);
+
+      // 状态圆点
+      const dot = document.createElementNS(SVG_NS, 'circle');
+      dot.setAttribute('cx', x + 12); dot.setAttribute('cy', y + nodeH / 2);
+      dot.setAttribute('r', '4'); dot.setAttribute('fill', color);
+      svg.appendChild(dot);
+
+      // 工具名文字
+      const text = document.createElementNS(SVG_NS, 'text');
+      text.setAttribute('x', x + 22); text.setAttribute('y', y + nodeH / 2 + 4);
+      text.setAttribute('fill', '#e2e8f0'); text.setAttribute('font-size', '10');
+      text.setAttribute('font-family', 'monospace');
+      const name = (tc.name || tc.tool || 'tool').substring(0, 12);
+      text.textContent = name;
+      svg.appendChild(text);
+    });
+
+    // 折叠指示
+    if (hasMore) {
+      const more = document.createElementNS(SVG_NS, 'text');
+      more.setAttribute('x', svgW / 2); more.setAttribute('y', svgH - 4);
+      more.setAttribute('fill', '#94a3b8'); more.setAttribute('font-size', '11');
+      more.setAttribute('text-anchor', 'middle');
+      more.textContent = `...+${toolCalls.length - TOOL_FLOW_MAX} 步`;
+      svg.appendChild(more);
+    }
+
+    return svg;
+  }
+
+  // 注入Tool Flow到消息气泡
+  function injectToolFlow(msgEl, toolCalls) {
+    if (!toolCalls || !toolCalls.length) return;
+    const container = document.createElement('div');
+    container.className = 'tool-flow-container';
+    const label = document.createElement('div');
+    label.className = 'tool-flow-label';
+    label.textContent = `🔧 Tool Flow (${toolCalls.length}步)`;
+    container.appendChild(label);
+    const svg = buildToolFlowSVG(toolCalls);
+    if (svg) container.appendChild(svg);
+
+    // 折叠/展开切换
+    container.addEventListener('click', () => {
+      container.classList.toggle('tool-flow-collapsed');
+    });
+    // 默认展开(≤5步)或折叠(>5步)
+    if (toolCalls.length > 5) container.classList.add('tool-flow-collapsed');
+
+    // 插入到消息内容之后
+    const contentEl = msgEl.querySelector('.msg-content') || msgEl.querySelector('.message-content');
+    if (contentEl) contentEl.appendChild(container);
+    else msgEl.appendChild(container);
+  }
+
+  /* ═════ T3.4.3: 快捷键体系 ═════ */
+  function initKeyboardShortcuts() {
+    document.addEventListener('keydown', (e) => {
+      const ctrl = e.ctrlKey || e.metaKey;
+
+      // Ctrl+N: 新建会话
+      if (ctrl && e.key === 'n') {
+        e.preventDefault();
+        const newBtn = document.getElementById('new-session-btn');
+        if (newBtn) newBtn.click();
+      }
+
+      // Ctrl+K: 搜索经验(聚焦输入框)
+      if (ctrl && e.key === 'k') {
+        e.preventDefault();
+        if (inputEl) inputEl.focus();
+        // 如果有搜索面板则切换
+        const searchPanel = document.getElementById('experience-search');
+        if (searchPanel) searchPanel.style.display = searchPanel.style.display === 'none' ? 'block' : 'none';
+      }
+
+      // Ctrl+L: 切换右侧面板
+      if (ctrl && e.key === 'l') {
+        e.preventDefault();
+        const toggle = document.getElementById('panel-toggle');
+        if (toggle) toggle.click();
+        // fallback: 直接toggle panel
+        const panel = document.getElementById('context-panel') || document.querySelector('.right-panel');
+        if (panel) panel.classList.toggle('panel-hidden');
+      }
+
+      // Esc: 停止当前生成
+      if (e.key === 'Escape' && !e.ctrlKey) {
+        const stopBtn = document.getElementById('stop-btn');
+        if (stopBtn && stopBtn.style.display !== 'none') stopBtn.click();
+      }
+    });
+  }
+
+  /* ═════ T3.4.4: 响应式断点 ═════ */
+  function initResponsive() {
+    const mql1280 = window.matchMedia('(min-width: 1280px)');
+    const mql768 = window.matchMedia('(min-width: 768px)');
+
+    function applyLayout() {
+      const root = document.documentElement;
+      if (mql1280.matches) {
+        root.setAttribute('data-layout', 'three-col');
+      } else if (mql768.matches) {
+        root.setAttribute('data-layout', 'two-col');
+      } else {
+        root.setAttribute('data-layout', 'single-col');
+      }
+    }
+
+    mql1280.addEventListener('change', applyLayout);
+    mql768.addEventListener('change', applyLayout);
+    applyLayout();
+  }
+
   /* ═════ Boot ═════ */
   lucide.createIcons();
   autoResize();
   inputEl.focus();
   // Fetch sessions immediately via HTTP (doesn't depend on WS connecting)
   refreshSessions();
+
+  // ── T3.4: Init keyboard shortcuts + responsive layout ──
+  initKeyboardShortcuts();
+  initResponsive();
 
   // ── Expose sophub functions to global scope for onclick ──
   window.openSophubDetail = openSophubDetail;
