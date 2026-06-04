@@ -159,6 +159,32 @@ def get_system_prompt():
         from memory.error_recovery import inject_error_recovery
         prompt = inject_error_recovery(prompt, script_dir)
     except Exception: pass
+    # ── Phase 2: 注入跨会话经验检索 (T2.1) ──
+    try:
+        from memory.experience_index import search as exp_search
+        # 从最近用户消息中提取搜索词(取history最后一条)
+        _hist = getattr(get_system_prompt, '_last_history', [])
+        if _hist:
+            _last = _hist[-1] if _hist else ''
+            results = exp_search(_last, script_dir=script_dir, limit=3)
+            if results:
+                lines = ['\n[Relevant Experience] 跨会话相关经验（供参考，非当前任务）:']
+                for r in results:
+                    lines.append(f"  - [{r.get('task_type','')}] {r.get('summary','')[:80]}")
+                    if r.get('key_insight'):
+                        lines.append(f"    关键: {r['key_insight'][:60]}")
+                lines.append('（以上经验来自历史会话，按相关性排序，仅供参考）\n')
+                prompt += '\n'.join(lines)
+    except Exception: pass
+    # ── Phase 2: 注入工具链建议 (T2.3) ──
+    try:
+        from memory.tool_chain_registry import get_next_tool_hint
+        _hist = getattr(get_system_prompt, '_last_history', [])
+        if _hist:
+            hint = get_next_tool_hint([], task_desc=_hist[-1], script_dir=script_dir)
+            if hint:
+                prompt += '\n' + hint + '\n'
+    except Exception: pass
     return prompt
 
 class GenericAgent:
@@ -288,6 +314,8 @@ class GenericAgent:
             rquery = smart_format(raw_query.replace('\n', ' '), max_str_len=200)
             self.history.append(f"[USER]: {rquery}")
             
+            # Phase 2: 传递history给跨会话经验检索
+            get_system_prompt._last_history = self.history
             sys_prompt = get_system_prompt() + getattr(self.llmclient.backend, 'extra_sys_prompt', '')
             if self.peer_hint: sys_prompt += f"\n[Peer] 用户提及其他会话/后台任务状态时: temp/model_responses/ (只找近期修改的文件尾部)\n"
             handler = GenericAgentHandler(self, self.history, os.path.join(script_dir, 'temp'))
@@ -395,6 +423,21 @@ if __name__ == '__main__':
         from memory.preference_learner import create_preference_hook
         create_preference_hook(agent)
     except Exception as _e: print(f'[Init] preference_learner hook skipped: {_e}')
+    # ── Phase 2: 注册跨会话经验索引hook (T2.1) ──
+    try:
+        from memory.experience_index import create_experience_index_hook
+        create_experience_index_hook(agent)
+    except Exception as _e: print(f'[Init] experience_index hook skipped: {_e}')
+    # ── Phase 2: 注册任务完成自动复盘hook (T2.2) ──
+    try:
+        from memory.skill_distiller import create_skill_distiller_hook
+        create_skill_distiller_hook(agent)
+    except Exception as _e: print(f'[Init] skill_distiller hook skipped: {_e}')
+    # ── Phase 2: 注册工具链模板hook (T2.3) ──
+    try:
+        from memory.tool_chain_registry import create_tool_chain_hook
+        create_tool_chain_hook(agent)
+    except Exception as _e: print(f'[Init] tool_chain hook skipped: {_e}')
     threading.Thread(target=agent.run, daemon=True).start()
 
     if args.task:

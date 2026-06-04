@@ -186,6 +186,13 @@ def _save_experience(experience, task_dir, script_dir):
     with open(exp_path, 'w', encoding='utf-8') as f:
         json.dump(output, f, ensure_ascii=False, indent=2)
     
+    # Phase 2 (T2.1.5): 增量更新跨会话经验索引
+    try:
+        from memory.experience_index import add_experience as _idx_add
+        _idx_add(experience, script_dir=script_dir)
+    except Exception:
+        pass
+    
     return True
 
 def _get_recent_experiences(script_dir, task_dir=None, limit=5):

@@ -1038,6 +1038,8 @@
         </div>
       </div>
       <div class="skill-card-brief">${escapeHTML(s.brief || '(无描述)')}</div>
+      ${s.use_count > 0 ? `<div class="skill-card-usage"><span class="usage-label">使用 ${s.use_count} 次</span><div class="usage-bar"><div class="usage-bar-fill" style="width:${Math.min(100, s.use_count * 10)}%"></div></div></div>` : ''}
+      ${s.auto_distilled ? '<div class="skill-card-auto-badge" title="任务复盘中自动沉淀">✨ 自动沉淀</div>' : ''}
       <div class="skill-card-footer">
         <span class="skill-card-tag ${tagCls}">${tagText}</span>
         <div class="flex items-center gap-2">
@@ -1859,38 +1861,39 @@
         listEl.innerHTML = '<div class="text-frost-400 text-[11.5px] p-3 text-center">暂无MCP服务器</div>';
         return;
       }
+      // T2.5.3: Enhanced MCP Hub rendering with status dot + tool tags
       listEl.innerHTML = servers.map(s => {
-        const statusColor = s.connected ? '#4ade80' : '#ef4444';
+        const statusCls = s.connected ? 'online' : 'offline';
         const statusText = s.connected ? '已连接' : '未连接';
-        const toolsHtml = (s.tools || []).map(t =>
-          `<div class="text-[10.5px] text-frost-300 py-0.5 px-2 rounded bg-white/5 truncate" title="${_esc(t.description || '')}">
-            <span class="text-accent-violet">⬡</span> ${_esc(t.name)}
-          </div>`
+        const toolTags = (s.tools || []).slice(0, 8).map(t =>
+          `<span class="mcp-tool-tag" title="${_esc(t.description || '')}">${_esc(t.name)}</span>`
         ).join('');
+        const moreCount = Math.max(0, (s.tools || []).length - 8);
         return `
-          <div class="mcp-server-card bg-white/[0.03] border border-white/[0.06] rounded-xl p-3 space-y-2">
-            <div class="flex items-center justify-between">
-              <div class="flex items-center gap-2 min-w-0">
-                <span class="w-2 h-2 rounded-full shrink-0" style="background:${statusColor}"></span>
-                <span class="text-[12px] font-medium text-frost-100 truncate">${_esc(s.name)}</span>
+          <div class="mcp-server-row">
+            <span class="mcp-status-dot ${statusCls}"></span>
+            <div class="mcp-server-info">
+              <div class="mcp-server-name">${_esc(s.name)} <span style="font-size:11px;font-weight:400;color:#94a3b8">${statusText}</span></div>
+              <div class="mcp-server-meta">
+                <span>${_esc(s.type || 'http')}</span>
+                <span>${(s.tools || []).length}个工具</span>
               </div>
-              <div class="flex items-center gap-1">
-                <label class="relative inline-flex items-center cursor-pointer" title="${s.enabled ? '禁用' : '启用'}">
-                  <input type="checkbox" class="mcp-toggle sr-only" data-server="${_esc(s.name)}" ${s.enabled ? 'checked' : ''}>
-                  <div class="toggle-track w-8 h-[18px] rounded-full transition-colors relative ${s.enabled ? 'bg-brand-500' : 'bg-white/15'}">
-                    <div class="toggle-thumb absolute top-[2px] ${s.enabled ? 'left-[18px]' : 'left-[2px]'} w-[14px] h-[14px] bg-white rounded-full transition-all shadow"></div>
-                  </div>
-                </label>
-                <button class="mcp-test-btn p-1 rounded text-frost-500 hover:text-frost-50 hover:bg-white/8 transition" data-server="${_esc(s.name)}" title="测试">
-                  <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
-                </button>
-                <button class="mcp-del-btn p-1 rounded text-frost-500 hover:text-red-400 hover:bg-white/8 transition" data-server="${_esc(s.name)}" title="删除">
-                  <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
-                </button>
-              </div>
+              <div style="margin-top:4px">${toolTags}${moreCount ? `<span class="mcp-tool-tag" style="background:rgba(255,255,255,0.06);color:#94a3b8">+${moreCount} more</span>` : ''}</div>
             </div>
-            <div class="text-[10.5px] text-frost-500">${_esc(s.type || 'http')} · ${statusText} · ${(s.tools || []).length}个工具</div>
-            <div class="space-y-1">${toolsHtml || '<div class="text-[10.5px] text-frost-500">无工具</div>'}</div>
+            <div style="display:flex;align-items:center;gap:4px;flex-shrink:0">
+              <label class="relative inline-flex items-center cursor-pointer" title="${s.enabled ? '禁用' : '启用'}">
+                <input type="checkbox" class="mcp-toggle sr-only" data-server="${_esc(s.name)}" ${s.enabled ? 'checked' : ''}>
+                <div class="toggle-track w-8 h-[18px] rounded-full transition-colors relative ${s.enabled ? 'bg-brand-500' : 'bg-white/15'}">
+                  <div class="toggle-thumb absolute top-[2px] ${s.enabled ? 'left-[18px]' : 'left-[2px]'} w-[14px] h-[14px] bg-white rounded-full transition-all shadow"></div>
+                </div>
+              </label>
+              <button class="mcp-test-btn p-1 rounded text-frost-500 hover:text-frost-50 hover:bg-white/8 transition" data-server="${_esc(s.name)}" title="测试">
+                <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+              </button>
+              <button class="mcp-del-btn p-1 rounded text-frost-500 hover:text-red-400 hover:bg-white/8 transition" data-server="${_esc(s.name)}" title="删除">
+                <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+              </button>
+            </div>
           </div>`;
       }).join('');
 
@@ -2021,6 +2024,231 @@
       resizing = false;
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
+    });
+  }
+
+  /* ═════ T2.4 Context Panel ═════ */
+  const ctxPanel = $('context-panel');
+  const ctxCloseBtn = $('ctx-panel-close');
+  const ctxExpSearch = $('ctx-exp-search');
+  const ctxExpSearchBtn = $('ctx-exp-search-btn');
+  const ctxExpResults = $('ctx-exp-results');
+  const ctxMemStats = { l1: $('ctx-l1-count'), l2: $('ctx-l2-count'), l3: $('ctx-l3-count') };
+  const ctxActiveMemories = $('ctx-active-memories');
+  const ctxPrefTags = $('ctx-pref-tags');
+
+  // Toggle Context Panel
+  function toggleContextPanel(forceState) {
+    if (!ctxPanel) return;
+    const isExpanded = ctxPanel.classList.contains('expanded');
+    const shouldExpand = forceState !== undefined ? forceState : !isExpanded;
+    if (shouldExpand) {
+      ctxPanel.classList.remove('hidden');
+      requestAnimationFrame(() => ctxPanel.classList.add('expanded'));
+    } else {
+      ctxPanel.classList.remove('expanded');
+      setTimeout(() => ctxPanel.classList.add('hidden'), 300);
+    }
+    // Re-create icons for the panel
+    setTimeout(() => lucide.createIcons(), 50);
+  }
+
+  if (ctxCloseBtn) ctxCloseBtn.addEventListener('click', () => toggleContextPanel(false));
+
+  // Keyboard shortcut: Ctrl+/ to toggle
+  document.addEventListener('keydown', (e) => {
+    if (e.ctrlKey && e.key === '/') {
+      e.preventDefault();
+      toggleContextPanel();
+    }
+  });
+
+  // Expose toggle for status-bar button (T1.5 mem badge click)
+  window.toggleContextPanel = toggleContextPanel;
+
+  // ── Memory Stats ──
+  function updateMemoryStats(data) {
+    if (!data) return;
+    if (ctxMemStats.l1 && data.l1 !== undefined) ctxMemStats.l1.textContent = data.l1;
+    if (ctxMemStats.l2 && data.l2 !== undefined) ctxMemStats.l2.textContent = data.l2;
+    if (ctxMemStats.l3 && data.l3 !== undefined) ctxMemStats.l3.textContent = data.l3;
+  }
+
+  // ── Active Memories ──
+  function renderActiveMemories(memories) {
+    if (!ctxActiveMemories) return;
+    if (!memories || memories.length === 0) {
+      ctxActiveMemories.innerHTML = '<div class="text-[10px] text-white/25 text-center py-1">暂无激活的记忆</div>';
+      return;
+    }
+    ctxActiveMemories.innerHTML = memories.map(m => {
+      const icon = m.type === 'sop' ? '📋' : m.type === 'fact' ? '💡' : '📌';
+      const color = m.type === 'sop' ? 'bg-amber-500/20 text-amber-400' : m.type === 'fact' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-brand-500/20 text-brand-400';
+      return `<div class="ctx-mem-card" title="${escHtml(m.text)}">
+        <span class="ctx-mem-icon ${color}">${icon}</span>
+        <span class="ctx-mem-text">${escHtml(m.text)}</span>
+      </div>`;
+    }).join('');
+  }
+
+  // ── Experience Search ──
+  function searchExperience(query) {
+    if (!query || !query.trim()) return;
+    ctxExpResults.innerHTML = '<div class="text-[10px] text-white/30 text-center py-3">搜索中...</div>';
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'experience_query', query: query.trim() }));
+    } else {
+      ctxExpResults.innerHTML = '<div class="text-[10px] text-red-400/60 text-center py-3">WebSocket未连接</div>';
+    }
+  }
+
+  if (ctxExpSearchBtn) ctxExpSearchBtn.addEventListener('click', () => searchExperience(ctxExpSearch.value));
+  if (ctxExpSearch) ctxExpSearch.addEventListener('keydown', (e) => { if (e.key === 'Enter') searchExperience(ctxExpSearch.value); });
+
+  function renderExperienceResults(results) {
+    if (!ctxExpResults) return;
+    if (!results || results.length === 0) {
+      ctxExpResults.innerHTML = '<div class="text-[10px] text-white/25 text-center py-3">未找到相关经验</div>';
+      return;
+    }
+    ctxExpResults.innerHTML = results.map(r => {
+      const pct = Math.round((r.relevance || 0) * 100);
+      const date = r.timestamp ? new Date(r.timestamp).toLocaleDateString('zh-CN') : '';
+      return `<div class="ctx-exp-card" data-exp-id="${escHtml(r.id || '')}" title="点击注入到对话">
+        <div class="ctx-exp-summary">${escHtml(r.summary || '')}</div>
+        <div class="ctx-exp-meta">
+          ${r.category ? `<span>${escHtml(r.category)}</span>` : ''}
+          ${date ? `<span>${date}</span>` : ''}
+          <span>相关度 ${pct}%</span>
+        </div>
+        <div class="ctx-exp-relevance"><div class="ctx-exp-relevance-bar" style="width:${pct}%"></div></div>
+      </div>`;
+    }).join('');
+    // Click to inject
+    ctxExpResults.querySelectorAll('.ctx-exp-card').forEach(card => {
+      card.addEventListener('click', () => {
+        const summary = card.querySelector('.ctx-exp-summary')?.textContent || '';
+        if (inputEl) {
+          inputEl.value = `[参考经验] ${summary}\n\n`;
+          inputEl.focus();
+          inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+      });
+    });
+  }
+
+  // ── Preference Tags ──
+  function renderPrefTags(prefs) {
+    if (!ctxPrefTags) return;
+    if (!prefs || prefs.length === 0) {
+      ctxPrefTags.innerHTML = '<div class="text-[10px] text-white/25 py-1">暂无学习到的偏好</div>';
+      return;
+    }
+    ctxPrefTags.innerHTML = prefs.map(p => {
+      return `<span class="ctx-pref-tag" data-pref-key="${escHtml(p.key || '')}">
+        ${escHtml(p.key)}: ${escHtml(p.value)}
+        <span class="ctx-pref-remove" data-pref="${escHtml(p.key)}" title="删除偏好">&times;</span>
+      </span>`;
+    }).join('');
+    // Remove preference on click
+    ctxPrefTags.querySelectorAll('.ctx-pref-remove').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const key = btn.dataset.pref;
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'preference_remove', key }));
+        }
+      });
+    });
+  }
+
+  // ── Handle WS messages for Context Panel ──
+  const _origWsOnMsg = ws?.onmessage;
+  function contextPanelWsHandler(event) {
+    try {
+      const data = JSON.parse(event.data);
+      if (data.type === 'memory_stats') updateMemoryStats(data.payload);
+      else if (data.type === 'memory_activated') renderActiveMemories(data.payload);
+      else if (data.type === 'experience_result') renderExperienceResults(data.payload);
+      else if (data.type === 'preferences_update') renderPrefTags(data.payload);
+      else if (data.type === 'review_suggestion') showReviewModal(data.payload);
+    } catch(e) {}
+  }
+  // Hook into WS onmessage chain
+  window._contextPanelWsHandler = contextPanelWsHandler;
+  if (ws) {
+    const _prev = ws.onmessage;
+    ws.onmessage = function(evt) {
+      contextPanelWsHandler(evt);  // T2: context panel gets first look
+      if (_prev) _prev.call(ws, evt);  // then original handler (wsHandlers dispatch)
+    };
+  }
+
+  // Request initial data when panel opens
+  function requestContextData() {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'memory_stats_request' }));
+      ws.send(JSON.stringify({ type: 'preferences_request' }));
+    }
+  }
+
+  // Patch toggle to also request data
+  const _origToggle = toggleContextPanel;
+  window.toggleContextPanel = function(forceState) {
+    const wasExpanded = ctxPanel?.classList.contains('expanded');
+    _origToggle(forceState);
+    const nowExpanded = ctxPanel?.classList.contains('expanded');
+    if (nowExpanded && !wasExpanded) requestContextData();
+  };
+
+  /* ═════ T2.5.4: Review Suggestion Modal ═════ */
+  function showReviewModal(data) {
+    // Ensure modal container exists
+    let modal = document.getElementById('review-modal');
+    if (!modal) {
+      modal = document.createElement('div');
+      modal.id = 'review-modal';
+      modal.className = 'review-modal';
+      document.body.appendChild(modal);
+    }
+    const p = data || {};
+    const timeline = (p.timeline || []).map(t =>
+      `<div class="review-timeline-item">
+        <span class="review-timeline-dot ${t.success ? 'success' : 'fail'}"></span>
+        <span class="review-timeline-text">${escapeHTML(t.task || '...')}</span>
+        <span class="review-timeline-time">${escapeHTML(t.time || '')}</span>
+      </div>`
+    ).join('');
+
+    const tools = (p.tools_used || []).map(t =>
+      `<span class="review-tool-tag">${escapeHTML(t)}</span>`
+    ).join('');
+
+    const diffColor = p.difficulty === '复杂' ? '#ef4444' : p.difficulty === '中等' ? '#fbbf24' : '#4ade80';
+
+    modal.innerHTML = `
+      <div class="review-backdrop"></div>
+      <div class="review-content">
+        <div class="review-header">
+          <span class="review-icon">✨</span>
+          <h3>任务复盘</h3>
+          <span class="review-time">${escapeHTML(p.timestamp || '')}</span>
+        </div>
+        <div class="review-summary">${escapeHTML(p.task_summary || '任务已完成')}</div>
+        <div class="review-difficulty"><span style="color:${diffColor}">●</span> ${escapeHTML(p.difficulty || '中等')}难度</div>
+        ${tools ? `<div class="review-section"><div class="review-section-title">使用工具</div><div class="review-tools">${tools}</div></div>` : ''}
+        ${p.key_insight ? `<div class="review-section"><div class="review-section-title">关键洞察</div><div class="review-insight-text">${escapeHTML(p.key_insight)}</div></div>` : ''}
+        ${timeline ? `<div class="review-section"><div class="review-section-title">近期任务时间线</div><div class="review-timeline">${timeline}</div></div>` : ''}
+        <button class="review-close-btn" id="review-close-btn">关闭复盘</button>
+      </div>`;
+    modal.style.display = 'flex';
+
+    // Close handlers
+    const close = () => { modal.style.display = 'none'; };
+    modal.querySelector('.review-backdrop').onclick = close;
+    modal.querySelector('#review-close-btn').onclick = close;
+    document.addEventListener('keydown', function esc(e) {
+      if (e.key === 'Escape') { close(); document.removeEventListener('keydown', esc); }
     });
   }
 

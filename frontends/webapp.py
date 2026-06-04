@@ -310,6 +310,14 @@ class ChatWS(WebSocket):
             elif t == 'context':
                 # IDE pushed editor state (active file, selection, open files, root).
                 ide_bridge.set_context(msg.get('payload') or {})
+            # ── T2.4.5: Context Panel queries ──
+            elif t == 'experience_query':
+                _handle_experience_query(self, msg.get('payload') or {})
+            elif t == 'context_data':
+                _handle_context_data(self)
+            # ── T2.5.4: Review suggestion (task completion review popup) ──
+            elif t == 'review_suggestion':
+                _handle_review_suggestion(self, msg.get('payload') or {})
         except Exception as e:
             traceback.print_exc()
             _send(self, {'type': 'error', 'payload': f'{type(e).__name__}: {e}'})
@@ -322,6 +330,131 @@ class ChatWS(WebSocket):
     def handle_close(self):
         WS_CONNS.discard(self)
         print(f'[webapp] WS closed: {self.address}')
+
+
+# ═══════════ T2.4.5: Context Panel query handlers ═══════════
+
+def _handle_experience_query(ws, payload):
+    """Search experience index and return results to Context Panel."""
+    query = (payload.get('query') or '').strip()
+    if not query:
+        _send(ws, {'type': 'experience_results', 'payload': []})
+        return
+    try:
+        import sys, os
+        _ga_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        if _ga_root not in sys.path:
+            sys.path.insert(0, _ga_root)
+        from memory.experience_index import ExperienceIndex
+        idx = ExperienceIndex()
+        results = idx.search(query, top_k=5)
+        _send(ws, {'type': 'experience_results', 'payload': results})
+    except Exception as e:
+        _send(ws, {'type': 'experience_results', 'payload': [], 'error': str(e)})
+
+
+def _handle_context_data(ws):
+    """Gather full context data for the Context Panel."""
+    import glob as _glob
+    _ga_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    _mem_dir = os.path.join(_ga_root, 'memory')
+    _data = {
+        'memory_stats': {
+            'sop_count': len(_glob.glob(os.path.join(_mem_dir, '*.md'))),
+            'module_count': len(_glob.glob(os.path.join(_mem_dir, '*.py'))),
+            'experience_count': 0,
+            'preference_count': 0,
+        },
+        'active_memories': [],
+        'preferences': [],
+    }
+    # Count experiences
+    _exp_file = os.path.join(_ga_root, 'temp', 'experience.json')
+    if os.path.exists(_exp_file):
+        try:
+            with open(_exp_file, 'r', encoding='utf-8') as f:
+                _edata = json.load(f)
+                _data['memory_stats']['experience_count'] = len(_edata) if isinstance(_edata, list) else sum(len(v) for v in _edata.values()) if isinstance(_edata, dict) else 0
+                # Include latest 3 experiences as active memories
+                exps = _edata if isinstance(_edata, list) else list(_edata.values())[:3] if isinstance(_edata, dict) else []
+                for exp in exps[:3]:
+                    if isinstance(exp, dict):
+                        _data['active_memories'].append({
+                            'title': exp.get('title', exp.get('task', '经验')),
+                            'summary': exp.get('summary', exp.get('key_learnings', ''))[:120],
+                            'category': exp.get('category', 'general'),
+                        })
+        except Exception:
+            pass
+    # Count preferences
+    _pref_file = os.path.join(_mem_dir, 'preferences.json')
+    if os.path.exists(_pref_file):
+        try:
+            with open(_pref_file, 'r', encoding='utf-8') as f:
+                _pdata = json.load(f)
+                prefs = _pdata.get('preferences', []) if isinstance(_pdata, dict) else []
+                _data['memory_stats']['preference_count'] = len(prefs)
+                for p in prefs[:10]:
+                    if isinstance(p, dict):
+                        _data['preferences'].append({
+                            'key': p.get('key', p.get('name', '')),
+                            'value': str(p.get('value', p.get('content', '')))[:80],
+                        })
+        except Exception:
+            pass
+    _send(ws, {'type': 'context_data', 'payload': _data})
+
+
+# ═══════════ T2.5.4: Review Suggestion handler ═══════════
+
+def _handle_review_suggestion(ws, payload):
+    """Generate a task review suggestion and send to frontend as popup.
+    
+    Called when agent detects task completion signal. Gathers:
+    - task_summary: what was done
+    - tools_used: tool chain from conversation
+    - key_insight: one-line takeaway
+    - difficulty: simple/medium/complex
+    - suggestion: distilled skill suggestion (if any)
+    """
+    import glob as _glob
+    _ga_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    
+    # Extract recent conversation context
+    task_summary = payload.get('task_summary', '任务完成')
+    tools_used = payload.get('tools_used', [])
+    key_insight = payload.get('key_insight', '')
+    difficulty = payload.get('difficulty', '中等')
+    
+    # Build timeline from recent experience
+    timeline = []
+    exp_file = os.path.join(ROOT, 'experience.json')
+    if os.path.exists(exp_file):
+        try:
+            with open(exp_file, 'r', encoding='utf-8') as f:
+                exps = json.load(f)
+            if isinstance(exps, list):
+                for exp in exps[-5:]:  # Last 5 experiences
+                    if isinstance(exp, dict):
+                        timeline.append({
+                            'task': exp.get('task', exp.get('summary', ''))[:60],
+                            'time': exp.get('created_at', ''),
+                            'success': exp.get('success', True),
+                        })
+        except Exception:
+            pass
+    
+    # Build review data
+    review = {
+        'task_summary': task_summary[:120],
+        'tools_used': tools_used[:8],
+        'key_insight': key_insight[:200],
+        'difficulty': difficulty,
+        'timeline': timeline,
+        'timestamp': time.strftime('%Y-%m-%d %H:%M'),
+    }
+    
+    _send(ws, {'type': 'review_suggestion', 'payload': review})
 
 
 def _do_action(ws, payload):
@@ -633,6 +766,58 @@ def _discover_skills():
             })
     except Exception as e:
         print(f'[skills] tools load error: {e}')
+
+    # ── T2.5.2: Scan auto_skills (distilled from task reviews) ──
+    auto_dir = os.path.join(sop_dir, 'auto_skills')
+    if os.path.isdir(auto_dir):
+        for p in sorted(glob.glob(os.path.join(auto_dir, '*.md'))):
+            try:
+                with open(p, encoding='utf-8', errors='replace') as f:
+                    txt = f.read(4000)
+                name = os.path.basename(p)
+                title = name.replace('.md', '').replace('_', ' ').title()
+                for line in txt.splitlines()[:5]:
+                    if line.startswith('#'):
+                        title = line.lstrip('# ').strip() or title
+                        break
+                brief = ''
+                content_lines = [l.strip() for l in txt.splitlines() if l.strip() and not l.startswith('#')]
+                if content_lines: brief = content_lines[0][:160]
+                sops.append({
+                    'id': 'auto:' + name,
+                    'name': name,
+                    'title': '✨ ' + title,
+                    'brief': brief,
+                    'size': os.path.getsize(p),
+                    'category': 'auto_skill',
+                    'icon': '⭐',
+                    'auto': True,
+                })
+            except Exception:
+                pass
+
+    # ── T2.5.2: Add usage counts from experience index ──
+    try:
+        idx_path = os.path.join(sop_dir, 'experience_index.json')
+        usage_map = {}
+        if os.path.isfile(idx_path):
+            idx_data = json.loads(open(idx_path, encoding='utf-8').read())
+            # Count tool mentions across all index entries
+            for kw, entries in idx_data.get('inverted', idx_data).items():
+                for entry in (entries if isinstance(entries, list) else []):
+                    # Count tools referenced
+                    tools = entry.get('tools_used', []) if isinstance(entry, dict) else []
+                    for t in tools:
+                        usage_map[t] = usage_map.get(t, 0) + 1
+        for s in sops:
+            s['use_count'] = usage_map.get(s.get('name', ''), 0)
+        for t in tools:
+            t['use_count'] = usage_map.get(t.get('name', ''), 0)
+    except Exception:
+        for s in sops:
+            s.setdefault('use_count', 0)
+        for t in tools:
+            t.setdefault('use_count', 0)
 
     return {'sops': sops, 'tools': tools}
 
