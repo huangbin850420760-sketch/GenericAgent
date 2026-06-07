@@ -108,6 +108,7 @@
     return true;
   }
   function ready() { return ws && ws.readyState === 1; }
+  function getWs() { return ws; }
 
   // Sophub (community SOP hub)
   async function sophubSearch(q, page = 1, pageSize = 24) { return _getJSON(`/api/sophub/search?q=${encodeURIComponent(q)}&page=${page}&page_size=${pageSize}`); }
@@ -177,13 +178,15 @@
   async function mcpToggle(name) { return _postJSON('/api/mcp/servers/' + encodeURIComponent(name) + '/toggle', {}); }
   async function mcpTest(server, tool, arguments) { return _postJSON('/api/mcp/test', { server, tool, arguments: arguments || {} }); }
 
+  function getHandlers() { return wsHandlers; }
+
   window.GA_API = {
     getConfig, getStatus,
     listSessions, getSessionHistory, restoreSession, renameSession, deleteSession,
     listSkills, getSop,
     uploadFile,
     getLLMConfig, saveLLMConfig, reloadLLMConfig, backupMykeyPy, listModels,
-    connect, send, ready,
+    connect, send, ready, getWs, getHandlers,
     sophubSearch, sophubSop, sophubDownload, sophubUpload, sophubMe,
     fetchSlashCommands,
     schedulerTasks, schedulerCreate, schedulerUpdate, schedulerDelete,

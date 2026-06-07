@@ -148,58 +148,8 @@ def get_system_prompt():
                 prompt += '\n'.join(lines) + '\n'
     except Exception:
         pass
-    # ── Phase 1: 注入用户偏好 (T1.3) ──
-    try:
-        from memory.preference_learner import _format_preferences_for_prompt
-        pref_text = _format_preferences_for_prompt(script_dir)
-        if pref_text: prompt += '\n' + pref_text + '\n'
-    except Exception: pass
-    # ── Phase 1: 注入错误恢复策略 (T1.4) ──
-    try:
-        from memory.error_recovery import inject_error_recovery
-        prompt = inject_error_recovery(prompt, script_dir)
-    except Exception: pass
-    # ── Phase 4: 注入能力边界自声明 (T4.3.2) ──
-    try:
-        from capability_reporter import get_capability_summary_text
-        cap_text = get_capability_summary_text()
-        if cap_text: prompt += '\n' + cap_text + '\n'
-    except Exception: pass
-    # ── Phase 2: 注入跨会话经验检索 (T2.1) ──
-    try:
-        from memory.experience_index import search as exp_search
-        # 从最近用户消息中提取搜索词(取history最后一条)
-        _hist = getattr(get_system_prompt, '_last_history', [])
-        if _hist:
-            _last = _hist[-1] if _hist else ''
-            results = exp_search(_last, script_dir=script_dir, limit=3)
-            if results:
-                lines = ['\n[Relevant Experience] 跨会话相关经验（供参考，非当前任务）:']
-                for r in results:
-                    lines.append(f"  - [{r.get('task_type','')}] {r.get('summary','')[:80]}")
-                    if r.get('key_insight'):
-                        lines.append(f"    关键: {r['key_insight'][:60]}")
-                lines.append('（以上经验来自历史会话，按相关性排序，仅供参考）\n')
-                prompt += '\n'.join(lines)
-    except Exception: pass
-    # ── Phase 2: 注入工具链建议 (T2.3) ──
-    try:
-        from memory.tool_chain_registry import get_next_tool_hint
-        _hist = getattr(get_system_prompt, '_last_history', [])
-        if _hist:
-            hint = get_next_tool_hint([], task_desc=_hist[-1], script_dir=script_dir)
-            if hint:
-                prompt += '\n' + hint + '\n'
-    except Exception: pass
-    # ── Phase 3: 注入MCP工具推荐 (T3.3) ──
-    try:
-        from memory.mcp_recommender import format_recommendation_hint
-        _hist = getattr(get_system_prompt, '_last_history', [])
-        if _hist:
-            rec_hint = format_recommendation_hint(_hist[-1], script_dir=script_dir)
-            if rec_hint:
-                prompt += '\n' + rec_hint + '\n'
-    except Exception: pass
+    # NOTE: 偏好/错误恢复/能力声明/经验检索/工具链/MCP推荐 统一由
+    # ga.py TurnHandler.process_turn_result() 每轮动态注入，此处不再重复
     return prompt
 
 class GenericAgent:
@@ -329,8 +279,6 @@ class GenericAgent:
             rquery = smart_format(raw_query.replace('\n', ' '), max_str_len=200)
             self.history.append(f"[USER]: {rquery}")
             
-            # Phase 2: 传递history给跨会话经验检索
-            get_system_prompt._last_history = self.history
             sys_prompt = get_system_prompt() + getattr(self.llmclient.backend, 'extra_sys_prompt', '')
             if self.peer_hint: sys_prompt += f"\n[Peer] 用户提及其他会话/后台任务状态时: temp/model_responses/ (只找近期修改的文件尾部)\n"
             handler = GenericAgentHandler(self, self.history, os.path.join(script_dir, 'temp'))

@@ -5,6 +5,7 @@ import tempfile, traceback, subprocess, itertools, collections, difflib, shutil
 if sys.stdout is None: sys.stdout = open(os.devnull, "w")
 if sys.stderr is None: sys.stderr = open(os.devnull, "w")
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), 'memory')))
 
 from agent_loop import BaseHandler, StepOutcome, json_default
 from error_recovery import record_error, inject_error_recovery
@@ -673,17 +674,12 @@ class GenericAgentHandler(BaseHandler):
                                       for r in _exp_results)
                 next_prompt += f"\n\n[Relevant Experience]\n{_exp_text}\n"
         except Exception: pass
-        # T1.6.2: 偏好注入prompt
+        # T1.6.2: 偏好注入prompt (use preference_learner's formatter)
         try:
-            _pref_path = os.path.join(script_dir, 'memory', 'preferences.json')
-            if os.path.exists(_pref_path):
-                import json as _json
-                with open(_pref_path, 'r', encoding='utf-8') as _pf:
-                    _prefs = _json.load(_pf)
-                if _prefs:
-                    _pref_lines = [f"- {k}: {v}" for k, v in _prefs.items() if isinstance(v, (str, int, float, bool))]
-                    if _pref_lines:
-                        next_prompt += f"\n\n[User Preferences]\n" + '\n'.join(_pref_lines) + '\n'
+            from memory.preference_learner import _format_preferences_for_prompt
+            _pref_text = _format_preferences_for_prompt(script_dir)
+            if _pref_text:
+                next_prompt += '\n' + _pref_text + '\n'
         except Exception: pass
         # T3.3.1: MCP工具推荐注入
         try:

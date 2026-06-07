@@ -97,19 +97,15 @@ _step_counter = [0]
 _last_step_time = [0.0]
 
 def _execution_step_hook(locals_dict):
-    """Push execution_step WS messages on each tool call completion."""
+    """Push execution_step WS messages on each tool call completion.
+    Collects all tool_calls first, then broadcasts once (throttled per batch)."""
     try:
         tool_calls = locals_dict.get('tool_calls') or []
         tool_results = locals_dict.get('tool_results') or []
-        turn = locals_dict.get('turn', 0)
         if not tool_calls:
             return
         now = time.time()
-        # T4.2.1-fix: duration = time since last step (approximate per-tool execution time)
         duration = round(now - _last_step_time[0], 3) if _last_step_time[0] > 0 else None
-        # T4.2.4: Throttle - skip if < 500ms since last push
-        if now - _last_step_time[0] < 0.5:
-            return
         _last_step_time[0] = now
         for idx, tc in enumerate(tool_calls):
             _step_counter[0] += 1
@@ -603,12 +599,21 @@ def _do_action(ws, payload):
             _send(ws, {'type': 'error', 'payload': f'恢复失败: {e}'})
     # ── T4.3.3+T4.3.4b: Capability report ──
     elif name == 'capability_report':
+        print(f'[webapp] DEBUG: capability_report action received, payload={payload}', flush=True)
         try:
+            if ROOT not in sys.path:
+                sys.path.insert(0, ROOT)
             from capability_reporter import get_capability_report
             report = get_capability_report()
+            print(f'[webapp] DEBUG: report keys={list(report.keys()) if isinstance(report, dict) else type(report)}', flush=True)
             _send(ws, {'type': 'capability_report_result', 'payload': report})
+            print(f'[webapp] DEBUG: capability_report_result sent!', flush=True)
         except Exception as e:
+            import traceback; traceback.print_exc()
             _send(ws, {'type': 'error', 'payload': f'能力报告生成失败: {e}'})
+    else:
+        if name:
+            print(f'[webapp] DEBUG: unknown action name={name!r}', flush=True)
 
 
 # ───────── Autonomous trigger (manual + idle) ─────────
