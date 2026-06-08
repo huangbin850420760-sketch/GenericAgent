@@ -29,6 +29,8 @@
 - `ljqCtrl.FindBlock(fn, wrect=None, verbose=0, threshold=0.8)`: 模板匹配找图。`fn` 为图片路径(str)或 PIL.Image；`wrect` 可为 `[l,u,r,b]` 物理矩形 / 区域字符串(如`'right2'`) / PIL.Image(直接用做背景图)。返回 `((center_x_physical, center_y_physical), is_found)`
 - `ljqCtrl.GetWRect(sr)`: 从字符串计算物理屏幕区域矩形。格式：方向+分割数，如 `'left2'`=左半屏、`'right3'`=右三分之一、`'top4'`=上四分之一。返回 `[left, up, right, bottom]` 物理坐标列表
 - `ljqCtrl.imshow(mt, sec=0)`: 调试用 OpenCV 显示。`mt` 为 numpy/OpenCV 图像，`sec` 为等待毫秒数（0=阻塞等按键）
+- `ljqCtrl.MouseDClick(staytime=0.05)`: 鼠标双击
+- 可先阅读computer_use.md
 
 ## 1. 环境载入
 import ljqCtrl
