@@ -182,4 +182,4 @@ if __name__ == '__main__':
         title='GenericAgent', url=f'http://localhost:{port}',
         width=WINDOW_WIDTH, height=WINDOW_HEIGHT, x=x_pos, y=TOP_PADDING,
         resizable=True, text_select=True)
-    webview.start()
+    webview.start(private_mode=False)

@@ -2,8 +2,14 @@
    GenericAgent · UI (uses GA_API layer for all backend I/O)
    ═══════════════════════════════════════════════════ */
 (() => {
+  // Safe storage wrapper - won't throw if storage is blocked (Edge Tracking Prevention etc.)
+  const _storage = {
+    get(k, fallback = null) { try { const v = localStorage.getItem(k); return v !== null ? v : fallback; } catch(e) { return fallback; } },
+    set(k, v) { try { localStorage.setItem(k, v); } catch(e) {} },
+    del(k) { try { localStorage.removeItem(k); } catch(e) {} }
+  };
+
   const API = window.GA_API;
-  const { send: wsSend, getWs, ready: wsReady } = API;
   const $ = (id) => document.getElementById(id);
 
   // Elements
@@ -15,24 +21,13 @@
   const imageInput = $('image-input');
   const statusDot = $('status-dot');
   const statusText = $('status-text');
-  const sbTurn = $('sb-turn');
-  const sbExp = $('sb-exp');
-  const sbPref = $('sb-pref');
-  const sbErr = $('sb-err');
-  const sbTools = $('sb-tools');
-  const sbDuration = $('sb-duration');
-  const sbMemCount = $('sb-mem-count');
-  // Memory mini-bar segments
-  const sbMbL1 = document.querySelector('[data-layer="l1"]');
-  const sbMbL2 = document.querySelector('[data-layer="l2"]');
-  const sbMbL3 = document.querySelector('[data-layer="l3"]');
-  const sbMbL4 = document.querySelector('[data-layer="l4"]');
-  // State counters
-  let toolCallCount = 0;
-  let errorCount = 0;
-  let sessionStartTime = Date.now();
+  const statusTurn = $('status-turn');
+  const statusExp = $('status-exp');
+  const statusPref = $('status-pref');
+  const statusErr = $('status-err');
+  const statusTools = $('status-tools');
   const headerMemory = $('header-memory');
-  // Header memory badges: hb-memory, hb-sop, hb-tools (queried on demand)
+  const headerMemCount = $('header-mem-count');
   const modeBtns = document.querySelectorAll('.mode-btn');
   const llmNameEl = $('llm-name');
   const llmSelector = $('llm-selector');
@@ -62,6 +57,7 @@
   // State
   const state = {
     tab: 'chat',
+    currentMode: 'chat',
     running: false,
     attachments: [],
     sessionQuery: '',
@@ -74,8 +70,10 @@
     savedActiveHTML: null,      // saved innerHTML of active conversation
     skills: { tools: [], sops: [] },
     currentSessionPath: null,
-    currentMode: 'chat',
   };
+
+  /* ═════ WebSocket send helper ═════ */
+  function wsSend(msg) { API.send(msg.type, msg.payload); }
 
   /* ═════ WebSocket wiring via API layer ═════ */
   API.connect({
@@ -101,13 +99,18 @@
     on_experience: (m) => { if (statusExp) { statusExp.classList.add('has-data'); statusExp.title = `经验: ${m.payload?.summary || '已提取'}`; } state.lastHasExperience = true; if (m.payload?.id) { if (!state.lastExperienceIds) state.lastExperienceIds = []; state.lastExperienceIds.push(m.payload.id); } },
     on_preference: (m) => { if (statusPref) { statusPref.classList.add('has-data'); statusPref.title = `偏好: ${m.payload?.key || '已学习'}`; } },
     on_error_recovery: (m) => { if (statusErr) { statusErr.classList.add('visible'); statusErr.title = `恢复: ${m.payload?.strategy || '已激活'}`; } },
+    on_capability_report_result: (m) => _renderCapCards(m.payload),
     on_memory_stats: (m) => {
       const p = m.payload || {};
       if (statusExp) { statusExp.textContent = `🧠${p.experience_count || 0}`; statusExp.title = `经验: ${p.experience_count || 0}条`; if (p.experience_count > 0) statusExp.classList.add('has-data'); }
       if (statusPref) { statusPref.textContent = `⚙️${p.preference_count || 0}`; statusPref.title = `偏好: ${p.preference_count || 0}条`; if (p.preference_count > 0) statusPref.classList.add('has-data'); }
-      // T1.5.1: 更新Header记忆徽章 + Status Bar计数
-      updateHeaderBadges(p);
-      if (sbMemCount) sbMemCount.textContent = ((p.experience_count||0) + (p.preference_count||0) + (p.sop_count||0));
+      // T1.5.1: 同步更新Header记忆指示器
+      if (headerMemCount) {
+        const exp = p.experience_count || 0;
+        const pref = p.preference_count || 0;
+        headerMemCount.textContent = `${exp + pref}`;
+        if (headerMemory) headerMemory.classList.toggle('has-data', exp + pref > 0);
+      }
     },
     on_auto_user: (m) => {
       if (state.viewingSessionPath) returnToActive();
@@ -152,42 +155,15 @@
         }, 500);
       }
     },
-    // ── T4.3: Capability report result ──
-    on_capability_report_result: (m) => {
-      _renderCapCards(m.payload);
-    },
   });
 
   /* ═════ Status ═════ */
-  const statusDotFooter = document.getElementById('status-dot-footer');
-  const statusTextFooter = document.getElementById('status-text-footer');
   function setStatus(text, running, error = false) {
     statusText.textContent = text;
-    statusDot.classList.remove('thinking', 'active', 'error');
-    // Sync footer status indicators
-    if (statusTextFooter) statusTextFooter.textContent = text;
-    if (running) {
-      statusDot.classList.add('thinking', 'status-dot-thinking-cadenced');
-      if (statusDotFooter) statusDotFooter.classList.add('thinking', 'status-dot-thinking-cadenced');
-    } else if (error) {
-      statusDot.classList.add('error');
-      statusDot.style.animation = 'shake-subtle 0.4s ease';
-      errorCount++;
-      if (sbErr) {
-        sbErr.textContent = errorCount;
-        const seg = sbErr.closest('.sb-segment');
-        if (seg) { seg.classList.add('has-error'); setTimeout(() => seg.classList.remove('has-error'), 4500); }
-      }
-      if (sbErr) sbErr.classList.remove('hidden');
-      if (statusDotFooter) { statusDotFooter.classList.add('error'); statusDotFooter.style.animation = statusDot.style.animation; }
-    } else {
-      statusDot.classList.add('active');
-      statusDot.classList.remove('status-dot-thinking-cadenced');
-      statusDot.style.animation = '';
-      if (statusDotFooter) { statusDotFooter.classList.add('active'); statusDotFooter.classList.remove('status-dot-thinking-cadenced'); statusDotFooter.style.animation = ''; }
-    }
+    statusDot.classList.remove('running', 'error');
+    if (running) statusDot.classList.add('running');
+    if (error) statusDot.classList.add('error');
   }
-
   function updateStatus(p) {
     state.llms = p.llms || [];
     state.currentLLM = p.llm || '';
@@ -199,22 +175,7 @@
     autonomousToggle.checked = state.autonomousEnabled;
     document.body.classList.toggle('autonomous-on', state.autonomousEnabled);
     if (autonomousHintText) autonomousHintText.textContent = state.autonomousEnabled ? '30分钟空闲后自动触发' : '已停止';
-    // Update memory mini-bar if data available
-    if (p.memory_layers && sbMbL1) {
-      const layers = p.memory_layers;
-      const total = layers.reduce((s, l) => s + l.count, 0) || 1;
-      [sbMbL1, sbMbL2, sbMbL3, sbMbL4].forEach((el, idx) => {
-        if (el && layers[idx]) {
-          el.style.width = Math.max(2, (layers[idx].count / total) * 100) + '%';
-          el.title = layers[idx].name + ': ' + layers[idx].count + '条';
-        }
-      });
-    }
-    if (sbMemCount && p.memory_total !== undefined) sbMemCount.textContent = p.memory_total;
-    // Duration timer
-    if (p.session_start) sessionStartTime = p.session_start * 1000;
   }
-
   function setRunning(r) {
     state.running = r;
     const icSend = sendBtn.querySelector('.send-ic-send');
@@ -225,125 +186,19 @@
       sendBtn.title = '停止 (Esc)';
       if (icSend) icSend.classList.add('hidden');
       if (icStop) icStop.classList.remove('hidden');
-      sessionStartTime = Date.now();
-      toolCallCount = 0;
-      errorCount = 0;
-      if (sbTools) { sbTools.textContent = ''; sbTools.classList.add('hidden'); }
-      if (sbErr) { sbErr.textContent = ''; sbErr.classList.add('hidden'); }
-      // Start duration timer
-      if (sbDuration) {
-        sbDuration.classList.remove('hidden');
-        sbDuration._timer = setInterval(() => {
-          const sec = Math.floor((Date.now() - sessionStartTime) / 1000);
-          sbDuration.textContent = sec < 60 ? sec + 's' : Math.floor(sec/60) + 'm' + (sec%60) + 's';
-        }, 1000);
-      }
     } else {
       setStatus('就绪', false);
       sendBtn.classList.remove('stopping');
       sendBtn.title = '发送 (Enter)';
       if (icSend) icSend.classList.remove('hidden');
       if (icStop) icStop.classList.add('hidden');
-      // Stop duration timer
-      if (sbDuration && sbDuration._timer) {
-        clearInterval(sbDuration._timer);
-        sbDuration._timer = null;
-      }
     }
   }
-
-  // ── Status Bar helpers ──
-  function incrementToolCount(toolName) {
-    toolCallCount++;
-    if (sbTools) {
-      sbTools.textContent = toolCallCount + ' 次工具调用';
-      sbTools.title = toolName || '';
-      sbTools.classList.remove('hidden');
-      // Flash animation
-      sbTools.classList.remove('sb-flash');
-      void sbTools.offsetWidth; // force reflow
-      sbTools.classList.add('sb-flash');
-    }
-    if (sbTurn) {
-      sbTurn.textContent = toolCallCount;
-      sbTurn.classList.remove('hidden');
-    }
-  }
-
-  function updateMemoryMiniBar(layers) {
-    if (!layers || !sbMbL1) return;
-    const total = layers.reduce((s, l) => s + l.count, 0) || 1;
-    [sbMbL1, sbMbL2, sbMbL3, sbMbL4].forEach((el, idx) => {
-      if (el && layers[idx]) {
-        el.style.width = Math.max(2, (layers[idx].count / total) * 100) + '%';
-        el.title = layers[idx].name + ': ' + layers[idx].count + '条';
-      }
-    });
-    if (sbMemCount) {
-      sbMemCount.textContent = total;
-      sbMemCount.classList.remove('hidden');
-    }
-  }
-
   setInterval(() => {
     if (!state.lastReplyTime) { idleValueEl.textContent = '—'; return; }
     const s = Math.max(0, Math.floor(Date.now() / 1000) - state.lastReplyTime);
     idleValueEl.textContent = formatDuration(s);
   }, 1000);
-
-  // ===== Header Memory Indicator =====
-  function updateHeaderBadges(stats) {
-    var exp = stats.experience_count || 0;
-    var pref = stats.preference_count || 0;
-    var sops = stats.sop_count || 0;
-    var tools = stats.tool_count || 0;
-    var total = exp + pref;
-    _setBadgeCount('hb-memory', total);
-    _setBadgeCount('hb-sop', sops);
-    _setBadgeCount('hb-tools', tools);
-    var indicator = document.querySelector('.header-memory-indicator');
-    if (indicator) indicator.classList.toggle('has-data', total + sops + tools > 0);
-    var popover = $('mem-popover');
-    if (popover && popover.classList.contains('show')) {
-      var mpExp = $('mp-exp'); if (mpExp) mpExp.textContent = exp;
-      var mpPref = $('mp-pref'); if (mpPref) mpPref.textContent = pref;
-      var mpSop = $('mp-sop'); if (mpSop) mpSop.textContent = sops;
-      var mpTools = $('mp-tools'); if (mpTools) mpTools.textContent = tools;
-      var mpMemory = $('mp-memory'); if (mpMemory) mpMemory.textContent = total + ' / ' + (total + sops + tools);
-    }
-  }
-
-  function _setBadgeCount(id, count) {
-    var el = $(id);
-    if (!el) return;
-    var old = parseInt(el.textContent) || 0;
-    el.textContent = count;
-    if (count !== old && count > 0) {
-      el.classList.add('badge-bounce');
-      setTimeout(function() { el.classList.remove('badge-bounce'); }, 400);
-    }
-    var badge = el.closest('.mem-badge');
-    if (badge) badge.classList.toggle('has-data', count > 0);
-  }
-
-  function initMemoryPopover() {
-    var indicator = document.querySelector('.header-memory-indicator');
-    var popover = $('mem-popover');
-    if (!indicator || !popover) return;
-    indicator.addEventListener('click', function(e) {
-      e.stopPropagation();
-      popover.classList.toggle('show');
-      var rect = indicator.getBoundingClientRect();
-      popover.style.top = (rect.bottom + 6) + 'px';
-      popover.style.right = (window.innerWidth - rect.right) + 'px';
-    });
-    popover.addEventListener('click', function(e) { e.stopPropagation(); });
-    document.addEventListener('click', function() {
-      if (popover) popover.classList.remove('show');
-    });
-  }
-
-  initMemoryPopover();
 
   function formatDuration(s) {
     if (s < 60) return s + 's';
@@ -550,116 +405,33 @@
     return el;
   }
 
-  /* ─ Build a tool-result strip with Error Recovery Panel ─ */
+  /* ─ Build a tool-result strip (collapsed by default) ─
+     Wrapped as msg-like element with empty avatar gutter so it aligns
+     visually with the assistant's body column. */
   function buildToolResults(parts) {
     const el = document.createElement('div');
     el.className = 'msg msg-tool-output';
     const count = parts.length;
-    
-    // Detect errors in tool results
-    const errors = parts.filter(p => {
-      const c = (p.content || '').toLowerCase();
-      return c.includes('"error"') || c.includes('"status":"error"') || c.includes('"status":"failed"') ||
-             c.includes('traceback') || c.includes('exception') || c.includes('permission denied') ||
-             c.includes('file not found') || c.includes('"ok":false') || c.includes('调用失败') ||
-             c.includes('操作失败') || c.includes('error:') || c.includes('失败:');
-    });
-    const hasError = errors.length > 0;
-    
-    const bodies = parts.map((p, idx) => {
-      const isErr = errors.includes(p);
+    const bodies = parts.map(p => {
       const isJSON = /^[\s\n]*[\{\[]/.test(p.content);
       const lang = isJSON ? 'json' : 'text';
-      const errCls = isErr ? ' tool-result-error' : '';
-      return `<pre class="tool-result-pre${errCls}"><code class="language-${lang}">${escapeHTML(p.content)}</code></pre>`;
+      return `<pre class="tool-result-pre"><code class="language-${lang}">${escapeHTML(p.content)}</code></pre>`;
     }).join('');
-    
-    // Build error recovery panel
-    let recoveryHTML = '';
-    if (hasError) {
-      const firstErr = errors[0].content || '';
-      let errTool = 'unknown', errMsg = '', errPath = '';
-      try {
-        const obj = JSON.parse(firstErr);
-        errTool = obj.tool || obj.name || 'unknown';
-        errMsg = obj.error || obj.message || obj.msg || '';
-        errPath = obj.path || obj.file || '';
-      } catch(e) {
-        const m = firstErr.match(/(\w+)\s*(?:→|->|:)\s*(.+)/);
-        if (m) { errTool = m[1]; errMsg = m[2]; }
-        else { errMsg = firstErr.slice(0, 200); }
-      }
-      recoveryHTML = `
-        <div class="error-recovery-panel">
-          <div class="error-recovery-header">
-            <i data-lucide="alert-triangle" class="w-4 h-4"></i>
-            <span>工具调用失败</span>
-            <span class="error-recovery-count">${errors.length} 个错误</span>
-          </div>
-          <div class="error-detail-card">
-            <div class="error-detail-row"><span class="error-label">工具</span><span class="error-value">${escapeHTML(errTool)}</span></div>
-            ${errPath ? `<div class="error-detail-row"><span class="error-label">路径</span><span class="error-value error-path">${escapeHTML(errPath)}</span></div>` : ''}
-            <div class="error-detail-row"><span class="error-label">错误</span><span class="error-value error-msg">${escapeHTML(errMsg.slice(0,300))}</span></div>
-          </div>
-          <div class="error-recovery-label">🔄 恢复策略</div>
-          <div class="error-recovery-actions">
-            <button class="recovery-btn recovery-retry" data-action="retry">
-              <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
-              <span>🔄 自动重试</span>
-              <small>相同参数重新执行</small>
-            </button>
-            <button class="recovery-btn recovery-alt" data-action="alternative">
-              <i data-lucide="git-branch" class="w-3.5 h-3.5"></i>
-              <span>🔀 替代方案</span>
-              <small>换用其他工具/方法</small>
-            </button>
-            <button class="recovery-btn recovery-skip" data-action="skip">
-              <i data-lucide="skip-forward" class="w-3.5 h-3.5"></i>
-              <span>⏭️ 跳过继续</span>
-              <small>忽略此步骤继续</small>
-            </button>
-          </div>
-        </div>`;
-    }
-    
     el.innerHTML = `
       <div class="msg-avatar-spacer"></div>
       <div class="msg-body">
-        ${recoveryHTML}
-        <div class="tool-result-strip${hasError ? ' has-error' : ''}">
+        <div class="tool-result-strip">
           <button class="tool-result-header" type="button">
-            <i data-lucide="${hasError ? 'alert-circle' : 'terminal'}" class="w-3.5 h-3.5"></i>
-            <span class="flex-1 text-left">${hasError ? '工具返回 · 包含错误' : '工具返回 · ' + count}</span>
+            <i data-lucide="terminal" class="w-3.5 h-3.5"></i>
+            <span class="flex-1 text-left">工具返回 · ${count}</span>
             <i data-lucide="chevron-down" class="caret w-4 h-4"></i>
           </button>
           <div class="tool-result-body">${bodies}</div>
         </div>
       </div>`;
-    
-    // Bind recovery buttons
-    el.querySelectorAll('.recovery-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const action = btn.dataset.action;
-        el.querySelectorAll('.recovery-btn').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        const actionMap = { retry: '自动重试', alternative: '替代方案', skip: '跳过继续' };
-        const input = document.getElementById('input');
-        if (input) {
-          const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
-          nativeInputValueSetter.call(input, `[恢复策略: ${actionMap[action]}] 请按选择的策略继续执行`);
-          input.dispatchEvent(new Event('input', { bubbles: true }));
-          input.focus();
-        }
-        showToast(`已选择: ${actionMap[action]}，请按Enter发送`, 'info');
-      });
-    });
-    
     el.querySelector('.tool-result-header').addEventListener('click', () =>
       el.querySelector('.tool-result-strip').classList.toggle('open'));
-    setTimeout(() => {
-      el.querySelectorAll('pre code').forEach(b => hljs.highlightElement(b));
-      if (typeof lucide !== 'undefined') lucide.createIcons();
-    }, 0);
+    setTimeout(() => el.querySelectorAll('pre code').forEach(b => hljs.highlightElement(b)), 0);
     return el;
   }
 
@@ -777,7 +549,6 @@
   });
 
   /* ═══ T1.5.4 Mode Switch ═══ */
-  const modeLabels = { chat: '💬 对话模式', plan: '📋 规划模式', auto: '🔄 自动模式', analyze: '🔰 分析模式' };
   modeBtns.forEach(btn => {
     btn.addEventListener('click', () => {
       const mode = btn.dataset.mode;
@@ -785,7 +556,6 @@
       state.currentMode = mode;
       modeBtns.forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
       API.send('mode_change', { mode });
-      showToast(`切换至 ${modeLabels[mode] || mode}`, 'info');
     });
   });
 
@@ -811,12 +581,6 @@
       </div>
       <div class="text-[34px] font-semibold tracking-tight leading-tight bg-gradient-to-br from-white via-frost-50 to-frost-200 bg-clip-text text-transparent">Hello, GenericAgent</div>
       <div class="text-frost-300 text-[14px] max-w-md">新对话已开启 · 输入任务开始</div>
-      <div class="welcome-quick-actions flex flex-wrap items-center justify-center gap-2 mt-4">
-        <button class="qa-chip" data-qa="capabilities"><i data-lucide="shield-check" class="w-3.5 h-3.5"></i><span>能力报告</span></button>
-        <button class="qa-chip" data-qa="memory"><i data-lucide="brain" class="w-3.5 h-3.5"></i><span>记忆状态</span></button>
-        <button class="qa-chip" data-qa="skills"><i data-lucide="package" class="w-3.5 h-3.5"></i><span>能力库</span></button>
-        <button class="qa-chip" data-qa="schedule"><i data-lucide="calendar-clock" class="w-3.5 h-3.5"></i><span>定时任务</span></button>
-      </div>
     </div>`;
     lucide.createIcons();
   }
@@ -826,18 +590,6 @@
   $('sidebar-collapse-2')?.addEventListener('click', () => document.body.classList.add('sidebar-collapsed'));
   $('sidebar-collapse-3')?.addEventListener('click', () => document.body.classList.add('sidebar-collapsed'));
   $('sidebar-expand')?.addEventListener('click', () => document.body.classList.remove('sidebar-collapsed'));
-
-  /* ═════ Quick Action chips (welcome screen) ═════ */
-  document.addEventListener('click', (e) => {
-    const chip = e.target.closest('[data-qa]');
-    if (!chip) return;
-    e.preventDefault();
-    const qa = chip.dataset.qa;
-    if (qa === 'capabilities') wsSend('capability_report', {});
-    else if (qa === 'memory') { toggleContextPanel(true); if (typeof switchCtxTab === 'function') switchCtxTab('memory'); }
-    else if (qa === 'skills') { if (typeof switchTab === 'function') switchTab('skills'); }
-    else if (qa === 'schedule') { toggleContextPanel(true); if (typeof switchCtxTab === 'function') switchCtxTab('timeline'); }
-  });
 
   /* ═════ Actions drawer toggle ═════ */
   const actionsToggle = $('actions-toggle');
@@ -917,29 +669,21 @@
     const segs = foldTurns(fullText);
     state.pendingAssistant.innerHTML = renderSegments(segs);
     attachTurnHandlers(state.pendingAssistant);
-    // T1.5.2: 记忆badge — Phase 2 enhanced card
+    // T1.5.2: 记忆badge
     if (state.lastHasExperience) {
-      const ids = state.lastExperienceIds || [];
-      const card = document.createElement('div');
-      card.className = 'memory-badge-card';
-      card.setAttribute('data-type', 'experience');
-      card.innerHTML = '<div class="badge-type">💡 记忆引用</div>' +
-        '<div class="badge-content">基于 ' + ids.length + ' 条历史经验生成回复</div>' +
-        '<div class="badge-source">' + ids.slice(0, 3).join(' · ') + (ids.length > 3 ? ' ...' : '') + '</div>';
-      card.addEventListener('click', () => toggleContextPanel(true));
-      state.pendingAssistant.parentElement.appendChild(card);
+      const badge = document.createElement('span');
+      badge.className = 'mem-badge';
+      badge.textContent = '📎 记忆';
+      badge.title = (state.lastExperienceIds || []).join(', ');
+      state.pendingAssistant.parentElement.appendChild(badge);
       state.lastHasExperience = false;
       state.lastExperienceIds = [];
     }
     state.pendingAssistant.classList.remove('streaming');
     // T3.4.2: 注入Tool Flow SVG可视化
     try {
-      // Match tool names: markdown-wrapped **tool_name** or bare tool_name( (function-call style)
-      // snake_case words of 2+ segments (e.g. file_read, web_execute_js, mcp_tool)
-      const toolRe = /\*{0,2}([a-z][a-z0-9]*(?:_[a-z0-9]+){1,})\*{0,2}\b(?=\s*[\(;:]|[^a-z])/gi;
-      const matches = fullText.match(toolRe) || [];
-      // Deduplicate and strip markdown asterisks
-      const toolCalls = [...new Set(matches.map(m => m.replace(/^\*+|\*+$/g, '')))];
+      const toolRe = /\*{0,2}(file_read|file_patch|file_write|code_run|web_scan|web_execute_js|mcp_tool|update_working_checkpoint|start_long_term_update|ask_user)\b/gi;
+      const toolCalls = [...new Set((fullText.match(toolRe) || []))];
       if (toolCalls.length > 0) {
         const msgEl = state.pendingAssistant.closest('.msg') || state.pendingAssistant.parentElement;
         if (msgEl) injectToolFlow(msgEl, toolCalls);
@@ -1309,7 +1053,8 @@
   }
 
   function renderSkills(filter = '') {
-    const { tools, sops } = state.skills;
+    if (!state.skills) return;
+    const { tools = [], sops = [] } = state.skills;
     const f = filter.trim().toLowerCase();
     const matches = (s) => !f || (s.title || '').toLowerCase().includes(f) ||
       (s.name || '').toLowerCase().includes(f) || (s.brief || '').toLowerCase().includes(f);
@@ -1317,9 +1062,12 @@
     const fTools = tools.filter(matches);
     const fSops = sops.filter(matches);
 
-    $('tools-count').textContent = `${fTools.length}`;
-    $('sops-count').textContent = `${fSops.length}`;
-    $('tools-grid').innerHTML = fTools.map(skillCardHTML).join('') ||
+    const toolsCountEl = $('tools-count');
+    if (toolsCountEl) toolsCountEl.textContent = `${fTools.length}`;
+    const sopsCountEl = $('sops-count');
+    if (sopsCountEl) sopsCountEl.textContent = `${fSops.length}`;
+    const toolsGrid = $('tools-grid');
+    if (toolsGrid) toolsGrid.innerHTML = fTools.map(skillCardHTML).join('') ||
       `<div class="col-span-full text-frost-400 text-sm text-center py-4">无匹配工具</div>`;
     const localGrid = $('sops-grid');
     if (localGrid) {
@@ -1336,10 +1084,12 @@
       { key: 'tool', label: '工具', count: tools.length },
       { key: 'sop', label: 'SOP', count: sops.length },
     ];
-    $('skills-categories').innerHTML = cats.map(c =>
+    const catsEl = $('skills-categories');
+    if (catsEl) catsEl.innerHTML = cats.map(c =>
       `<div class="skill-cat" data-cat="${c.key}"><span>${c.label}</span><span class="count">${c.count}</span></div>`
     ).join('');
-    $('skills-stats').innerHTML = `
+    const statsEl = $('skills-stats');
+    if (statsEl) statsEl.innerHTML = `
       <div>工具数量：<span class="text-frost-50 font-mono">${tools.length}</span></div>
       <div>SOP 数量：<span class="text-frost-50 font-mono">${sops.length}</span></div>
       <div class="text-frost-400 text-[10.5px] pt-1">点击卡片查看详情</div>`;
@@ -1353,23 +1103,16 @@
   function skillCardHTML(s) {
     const tagCls = s.category === 'tool' ? 'tool' : 'sop';
     const tagText = s.category === 'tool' ? 'TOOL' : 'SOP';
-    const successRate = s.success_rate != null ? s.success_rate : (s.use_count > 0 ? Math.min(98, 60 + Math.floor(s.use_count * 2)) : null);
-    const rateColor = successRate >= 85 ? '#22c55e' : successRate >= 60 ? '#f59e0b' : '#ef4444';
-    const version = s.version || '';
     return `<div class="skill-card" data-skill-id="${escapeAttr(s.id)}" data-skill-category="${s.category}">
       <div class="skill-card-header">
         <div class="skill-card-icon">${escapeHTML(s.icon || '📦')}</div>
         <div class="min-w-0 flex-1">
           <div class="skill-card-title">${escapeHTML(s.title || s.name)}</div>
-          <div class="skill-card-name">${escapeHTML(s.name)}${version ? `<span class="skill-version">v${escapeHTML(version)}</span>` : ''}</div>
+          <div class="skill-card-name">${escapeHTML(s.name)}</div>
         </div>
       </div>
       <div class="skill-card-brief">${escapeHTML(s.brief || '(无描述)')}</div>
-      <div class="skill-card-stats">
-        <span class="skill-use-count">📊 ${s.use_count || 0} 次使用</span>
-        ${successRate != null ? `<span class="skill-success-label">成功率</span>` : ''}
-      </div>
-      ${successRate != null ? `<div class="skill-rate-bar"><div class="skill-rate-fill" style="width:${successRate}%;background:${rateColor}"></div><span class="skill-rate-text" style="color:${rateColor}">${successRate}%</span></div>` : ''}
+      ${s.use_count > 0 ? `<div class="skill-card-usage"><span class="usage-label">使用 ${s.use_count} 次</span><div class="usage-bar"><div class="usage-bar-fill" style="width:${Math.min(100, s.use_count * 10)}%"></div></div></div>` : ''}
       ${s.auto_distilled ? '<div class="skill-card-auto-badge" title="任务复盘中自动沉淀">✨ 自动沉淀</div>' : ''}
       <div class="skill-card-footer">
         <span class="skill-card-tag ${tagCls}">${tagText}</span>
@@ -1738,14 +1481,14 @@
     const tog = $('theme-toggle');
     if (tog) tog.checked = isLight;
   }
-  const savedTheme = localStorage.getItem('ga-theme') || 'dark';
+  const savedTheme = _storage.get('ga-theme', 'dark');
   applyTheme(savedTheme);
   // Bind theme-toggle (checkbox in settings panel, if exists)
   const themeToggle = $('theme-toggle');
   if (themeToggle) {
     themeToggle.addEventListener('change', (e) => {
       const next = e.target.checked ? 'light' : 'dark';
-      localStorage.setItem('ga-theme', next);
+      _storage.set('ga-theme', next);
       applyTheme(next);
     });
   }
@@ -1755,7 +1498,7 @@
     themeToggleRail.addEventListener('click', () => {
       const current = document.documentElement.classList.contains('theme-light') ? 'light' : 'dark';
       const next = current === 'dark' ? 'light' : 'dark';
-      localStorage.setItem('ga-theme', next);
+      _storage.set('ga-theme', next);
       applyTheme(next);
     });
   }
@@ -2205,42 +1948,30 @@
           `<span class="mcp-tool-tag" title="${_esc(t.description || '')}">${_esc(t.name)}</span>`
         ).join('');
         const moreCount = Math.max(0, (s.tools || []).length - 8);
-        const useCount = s.use_count || 0;
-        const lastUsed = s.last_used ? timeAgo(s.last_used) : '未使用';
-        const statusEmoji = s.connected ? '🟢' : '🔴';
-        const desc = s.description || s.type || 'http';
         return `
-          <div class="mcp-server-row mcp-server-enhanced" data-server="${_esc(s.name)}">
-            <div class="mcp-server-header">
-              <div class="mcp-server-status-group">
-                <span class="mcp-status-dot ${statusCls}" title="${statusText}"></span>
-                <div class="mcp-server-name">${_esc(s.name)}</div>
-                <span class="mcp-status-badge ${statusCls}">${statusEmoji} ${statusText}</span>
+          <div class="mcp-server-row">
+            <span class="mcp-status-dot ${statusCls}"></span>
+            <div class="mcp-server-info">
+              <div class="mcp-server-name">${_esc(s.name)} <span style="font-size:11px;font-weight:400;color:#94a3b8">${statusText}</span></div>
+              <div class="mcp-server-meta">
+                <span>${_esc(s.type || 'http')}</span>
+                <span>${(s.tools || []).length}个工具</span>
               </div>
-              <div class="mcp-server-actions">
-                ${!s.connected ? `<button class="mcp-reconnect-btn" data-server="${_esc(s.name)}" title="重新连接"><i data-lucide="refresh-cw" class="w-3 h-3"></i>重新连接</button>` : ''}
-                <label class="relative inline-flex items-center cursor-pointer" title="${s.enabled ? '禁用' : '启用'}">
-                  <input type="checkbox" class="mcp-toggle sr-only" data-server="${_esc(s.name)}" ${s.enabled ? 'checked' : ''}>
-                  <div class="toggle-track w-8 h-[18px] rounded-full transition-colors relative ${s.enabled ? 'bg-brand-500' : 'bg-white/15'}">
-                    <div class="toggle-thumb absolute top-[2px] ${s.enabled ? 'left-[18px]' : 'left-[2px]'} w-[14px] h-[14px] bg-white rounded-full transition-all shadow"></div>
-                  </div>
-                </label>
-                <button class="mcp-test-btn p-1 rounded text-frost-500 hover:text-frost-50 hover:bg-white/8 transition" data-server="${_esc(s.name)}" title="测试">
-                  <i data-lucide="zap" class="w-3 h-3"></i>
-                </button>
-                <button class="mcp-del-btn p-1 rounded text-frost-500 hover:text-red-400 hover:bg-white/8 transition" data-server="${_esc(s.name)}" title="删除">
-                  <i data-lucide="x" class="w-3 h-3"></i>
-                </button>
-              </div>
+              <div style="margin-top:4px">${toolTags}${moreCount ? `<span class="mcp-tool-tag" style="background:rgba(255,255,255,0.06);color:#94a3b8">+${moreCount} more</span>` : ''}</div>
             </div>
-            <div class="mcp-server-body">
-              <div class="mcp-server-desc">${_esc(desc)}</div>
-              <div class="mcp-server-stats">
-                <span class="mcp-stat"><i data-lucide="wrench" class="w-3 h-3"></i>${(s.tools || []).length}个工具</span>
-                <span class="mcp-stat"><i data-lucide="bar-chart-3" class="w-3 h-3"></i>今日${useCount}次</span>
-                <span class="mcp-stat"><i data-lucide="clock" class="w-3 h-3"></i>${lastUsed}</span>
-              </div>
-              <div class="mcp-tool-tags">${toolTags}${moreCount ? `<span class="mcp-tool-tag mcp-tool-more">+${moreCount}</span>` : ''}</div>
+            <div style="display:flex;align-items:center;gap:4px;flex-shrink:0">
+              <label class="relative inline-flex items-center cursor-pointer" title="${s.enabled ? '禁用' : '启用'}">
+                <input type="checkbox" class="mcp-toggle sr-only" data-server="${_esc(s.name)}" ${s.enabled ? 'checked' : ''}>
+                <div class="toggle-track w-8 h-[18px] rounded-full transition-colors relative ${s.enabled ? 'bg-brand-500' : 'bg-white/15'}">
+                  <div class="toggle-thumb absolute top-[2px] ${s.enabled ? 'left-[18px]' : 'left-[2px]'} w-[14px] h-[14px] bg-white rounded-full transition-all shadow"></div>
+                </div>
+              </label>
+              <button class="mcp-test-btn p-1 rounded text-frost-500 hover:text-frost-50 hover:bg-white/8 transition" data-server="${_esc(s.name)}" title="测试">
+                <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+              </button>
+              <button class="mcp-del-btn p-1 rounded text-frost-500 hover:text-red-400 hover:bg-white/8 transition" data-server="${_esc(s.name)}" title="删除">
+                <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+              </button>
             </div>
           </div>`;
       }).join('');
@@ -2278,45 +2009,6 @@
           } catch (e) { showToast('切换失败: ' + e.message, 'error'); loadMCPPanel(); }
         });
       });
-      // Bind reconnect buttons
-      listEl.querySelectorAll('.mcp-reconnect-btn').forEach(btn => {
-        btn.addEventListener('click', async () => {
-          const name = btn.dataset.server;
-          btn.disabled = true;
-          btn.innerHTML = '<span class="reconnect-spinner"></span>';
-          showToast(`正在重连 ${name}...`, 'info');
-          try {
-            await API.mcpToggle(name);
-            const r = await API.mcpTest(name);
-            showToast(r?.ok ? '✅ 重连成功' : '⚠️ 重连后测试未通过', r?.ok ? 'success' : 'warning');
-          } catch (e) { showToast('重连失败: ' + e.message, 'error'); }
-          loadMCPPanel();
-        });
-      });
-      // Recommendation card
-      const allServers = data.servers || data || [];
-      const connectedNames = new Set(allServers.filter(s => s.connected).map(s => s.name));
-      const recommendations = [
-        { name: 'zread', desc: 'GitHub仓库文档搜索与代码阅读', icon: '📂' },
-        { name: 'web_search_prime', desc: '网络搜索信息获取', icon: '🔍' },
-        { name: 'web_reader', desc: '网页内容抓取与转换', icon: '🌐' },
-      ].filter(r => !connectedNames.has(r.name));
-      const recEl = $('mcp-recommendations');
-      if (recEl && recommendations.length) {
-        recEl.innerHTML = `<div class="mcp-rec-title">💡 推荐启用</div>` +
-          recommendations.map(r => `
-            <div class="mcp-rec-card">
-              <span class="mcp-rec-icon">${r.icon}</span>
-              <div class="mcp-rec-info">
-                <div class="mcp-rec-name">${r.name}</div>
-                <div class="mcp-rec-desc">${r.desc}</div>
-              </div>
-            </div>`).join('');
-        recEl.style.display = 'block';
-      } else if (recEl) {
-        recEl.style.display = 'none';
-      }
-      lucide.createIcons();
     } catch (e) {
       listEl.innerHTML = `<div class="text-frost-400 text-[11.5px] p-3 text-center">加载失败: ${_esc(e.message)}</div>`;
     }
@@ -2442,114 +2134,6 @@
 
   if (ctxCloseBtn) ctxCloseBtn.addEventListener('click', () => toggleContextPanel(false));
 
-  // ── Tab Switching (Phase 2 enhanced) ──
-  const ctxTabs = ctxPanel ? ctxPanel.querySelectorAll('.ctx-tab') : [];
-  const ctxPanes = ctxPanel ? ctxPanel.querySelectorAll('.ctx-tab-pane') : [];
-  function switchCtxTab(tabName) {
-    ctxTabs.forEach(t => {
-      const isActive = t.dataset.tab === tabName;
-      t.classList.toggle('active', isActive);
-      t.setAttribute('aria-selected', isActive);
-    });
-    ctxPanes.forEach(p => {
-      const isActive = p.dataset.pane === tabName;
-      p.classList.toggle('active', isActive);
-      p.style.display = isActive ? 'block' : 'none';
-    });
-  }
-  ctxTabs.forEach(tab => {
-    tab.addEventListener('click', () => switchCtxTab(tab.dataset.tab));
-  });
-
-  // ── Enhanced Panel Expand with Width Animation ──
-  const _origToggle = toggleContextPanel;
-  toggleContextPanel = function(forceState) {
-    if (!ctxPanel) return;
-    const isExpanded = ctxPanel.classList.contains('expanded');
-    const shouldExpand = forceState !== undefined ? forceState : !isExpanded;
-    if (shouldExpand) {
-      ctxPanel.classList.remove('hidden');
-      ctxPanel.style.width = '0px';
-      ctxPanel.style.opacity = '0';
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          ctxPanel.style.width = '';  // Let CSS clamp() rule take effect
-          ctxPanel.style.opacity = '1';
-          ctxPanel.classList.add('expanded');
-        });
-      });
-    } else {
-      ctxPanel.style.width = '0px';
-      ctxPanel.style.opacity = '0';
-      ctxPanel.classList.remove('expanded');
-      setTimeout(() => ctxPanel.classList.add('hidden'), 350);
-    }
-    setTimeout(() => lucide.createIcons(), 80);
-  };
-  // Re-expose after override
-  window.toggleContextPanel = toggleContextPanel;
-
-  // ── Context Panel Resize Handle ──
-  const ctxResizeHandle = $('ctx-resize-handle');
-  if (ctxResizeHandle && ctxPanel) {
-    const _positionResizeHandle = () => {
-      if (!ctxPanel.classList.contains('expanded')) { ctxResizeHandle.style.display = 'none'; return; }
-      const rect = ctxPanel.getBoundingClientRect();
-      ctxResizeHandle.style.display = '';
-      ctxResizeHandle.style.position = 'fixed';
-      ctxResizeHandle.style.left = (rect.left - 2) + 'px';
-      ctxResizeHandle.style.top = rect.top + 'px';
-      ctxResizeHandle.style.height = rect.height + 'px';
-    };
-    // Reposition on panel toggle/resize
-    const _origToggle2 = toggleContextPanel;
-    const _resizeObs = new ResizeObserver(_positionResizeHandle);
-    _resizeObs.observe(ctxPanel);
-    // Also reposition on any panel state change
-    ctxPanel.addEventListener('transitionend', _positionResizeHandle);
-
-    let ctxResizing = false, ctxStartX = 0, ctxStartW = 0;
-    ctxResizeHandle.addEventListener('mousedown', (e) => {
-      if (!ctxPanel.classList.contains('expanded')) return;
-      ctxResizing = true;
-      ctxStartX = e.clientX;
-      ctxStartW = ctxPanel.offsetWidth;
-      document.body.style.cursor = 'col-resize';
-      document.body.style.userSelect = 'none';
-      e.preventDefault();
-    });
-    document.addEventListener('mousemove', (e) => {
-      if (!ctxResizing) return;
-      const dx = ctxStartX - e.clientX;
-      const newW = Math.max(280, Math.min(600, ctxStartW + dx));
-      ctxPanel.style.width = newW + 'px';
-    });
-    document.addEventListener('mouseup', () => {
-      if (!ctxResizing) return;
-      ctxResizing = false;
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-    });
-  }
-
-  // ── Total Badge Update ──
-  function updateCtxTotalBadge() {
-    const badge = $('ctx-total-badge');
-    if (!badge) return;
-    const l1 = parseInt(ctxMemStats.l1?.textContent) || 0;
-    const l2 = parseInt(ctxMemStats.l2?.textContent) || 0;
-    const l3 = parseInt(ctxMemStats.l3?.textContent) || 0;
-    const total = l1 + l2 + l3;
-    badge.textContent = total;
-    badge.classList.toggle('has-data', total > 0);
-  }
-  // Hook into updateMemoryStats to also update badge
-  const _origUpdateMemStats = updateMemoryStats;
-  updateMemoryStats = function(data) {
-    _origUpdateMemStats(data);
-    updateCtxTotalBadge();
-  };
-
   // Keyboard shortcut: Ctrl+/ to toggle
   document.addEventListener('keydown', (e) => {
     if (e.ctrlKey && e.key === '/') {
@@ -2608,8 +2192,8 @@
   function searchExperience(query) {
     if (!query || !query.trim()) return;
     ctxExpResults.innerHTML = '<div class="text-[10px] text-white/30 text-center py-3">搜索中...</div>';
-    if (wsReady()) {
-      wsSend('experience_query', { query: query.trim() });
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'experience_query', query: query.trim() }));
     } else {
       ctxExpResults.innerHTML = '<div class="text-[10px] text-red-400/60 text-center py-3">WebSocket未连接</div>';
     }
@@ -2668,15 +2252,15 @@
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
         const key = btn.dataset.pref;
-        if (wsReady()) {
-          wsSend('preference_remove', { key });
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'preference_remove', key }));
         }
       });
     });
   }
 
   // ── Handle WS messages for Context Panel ──
-  const _ws = getWs(); const _origWsOnMsg = _ws?.onmessage;
+  const _origWsOnMsg = ws?.onmessage;
   function contextPanelWsHandler(event) {
     try {
       const data = JSON.parse(event.data);
@@ -2689,27 +2273,27 @@
   }
   // Hook into WS onmessage chain
   window._contextPanelWsHandler = contextPanelWsHandler;
-  if (_ws) {
-    const _prev = _ws.onmessage;
-    _ws.onmessage = function(evt) {
+  if (ws) {
+    const _prev = ws.onmessage;
+    ws.onmessage = function(evt) {
       contextPanelWsHandler(evt);  // T2: context panel gets first look
-      if (_prev) _prev.call(_ws, evt);  // then original handler (wsHandlers dispatch)
+      if (_prev) _prev.call(ws, evt);  // then original handler (wsHandlers dispatch)
     };
   }
 
   // Request initial data when panel opens
   function requestContextData() {
-    if (wsReady()) {
-      wsSend('memory_stats_request');
-      wsSend('preferences_request');
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'memory_stats_request' }));
+      ws.send(JSON.stringify({ type: 'preferences_request' }));
     }
   }
 
   // Patch toggle to also request data
-  const _origCtxToggle = toggleContextPanel;
+  const _origToggle = toggleContextPanel;
   window.toggleContextPanel = function(forceState) {
     const wasExpanded = ctxPanel?.classList.contains('expanded');
-    _origCtxToggle(forceState);
+    _origToggle(forceState);
     const nowExpanded = ctxPanel?.classList.contains('expanded');
     if (nowExpanded && !wasExpanded) requestContextData();
   };
@@ -2752,57 +2336,12 @@
         ${tools ? `<div class="review-section"><div class="review-section-title">使用工具</div><div class="review-tools">${tools}</div></div>` : ''}
         ${p.key_insight ? `<div class="review-section"><div class="review-section-title">关键洞察</div><div class="review-insight-text">${escapeHTML(p.key_insight)}</div></div>` : ''}
         ${timeline ? `<div class="review-section"><div class="review-section-title">近期任务时间线</div><div class="review-timeline">${timeline}</div></div>` : ''}
-        ${p.pattern ? `
-        <div class="review-section review-pattern-section">
-          <div class="review-section-title">🔄 模式识别</div>
-          <div class="review-pattern-card">
-            <div class="pattern-name">${escapeHTML(p.pattern.name || 'CSS样式修复流程')}</div>
-            <div class="pattern-steps">${(p.pattern.steps || ['截图分析','定位元素','修改样式','验证结果']).map((s,i) => '<span class="pattern-step-num">' + (i+1) + '</span><span class="pattern-step-text">' + escapeHTML(s) + '</span>').join(' → ')}</div>
-            <div class="pattern-actions">
-              <button class="pattern-btn pattern-save-btn" data-action="save">💾 保存为SOP</button>
-              <button class="pattern-btn pattern-ignore-btn" data-action="ignore">忽略</button>
-            </div>
-          </div>
-        </div>` : ''}
         <button class="review-close-btn" id="review-close-btn">关闭复盘</button>
       </div>`;
     modal.style.display = 'flex';
-    modal.classList.add('review-modal-active');
-
-    // Staggered animation for timeline items
-    modal.querySelectorAll('.review-timeline-item').forEach((item, i) => {
-      item.style.opacity = '0';
-      item.style.transform = 'translateX(-12px)';
-      setTimeout(() => {
-        item.style.transition = 'opacity 0.35s ease, transform 0.35s ease';
-        item.style.opacity = '1';
-        item.style.transform = 'translateX(0)';
-      }, 80 * i);
-    });
-
-    // Pattern save/ignore handlers
-    modal.querySelectorAll('.pattern-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const card = btn.closest('.review-pattern-card');
-        if (btn.dataset.action === 'save') {
-          card.classList.add('pattern-saved');
-          btn.textContent = '✅ 已保存';
-          btn.disabled = true;
-          if (typeof sendWsMessage === 'function') {
-            sendWsMessage({ type: 'save_pattern', pattern: p.pattern });
-          }
-        } else {
-          card.style.opacity = '0.4';
-          card.style.pointerEvents = 'none';
-        }
-      });
-    });
 
     // Close handlers
-    const close = () => {
-      modal.classList.remove('review-modal-active');
-      setTimeout(() => { modal.style.display = 'none'; }, 300);
-    };
+    const close = () => { modal.style.display = 'none'; };
     modal.querySelector('.review-backdrop').onclick = close;
     modal.querySelector('#review-close-btn').onclick = close;
     document.addEventListener('keydown', function esc(e) {
@@ -2818,73 +2357,32 @@
     if (!toolCalls || !toolCalls.length) return null;
     const display = toolCalls.slice(0, TOOL_FLOW_MAX);
     const hasMore = toolCalls.length > TOOL_FLOW_MAX;
-    const nodeW = 110, nodeH = 40, gapX = 28, gapY = 12;
+    const nodeW = 100, nodeH = 36, gapX = 24, gapY = 8;
     const cols = Math.min(display.length, 5);
     const rows = Math.ceil(display.length / cols);
     const svgW = cols * (nodeW + gapX) + gapX;
-    const svgH = rows * (nodeH + gapY) + gapY + (hasMore ? 28 : 0);
+    const svgH = rows * (nodeH + gapY) + gapY + (hasMore ? 24 : 0);
 
     const svg = document.createElementNS(SVG_NS, 'svg');
     svg.setAttribute('class', 'tool-flow-svg');
     svg.setAttribute('width', '100%');
     svg.setAttribute('viewBox', `0 0 ${svgW} ${svgH}`);
-    svg.style.overflow = 'visible';
 
-    // Tool emoji map
-    const toolEmoji = (name) => {
-      const n = (name || '').toLowerCase();
-      if (n.includes('search') || n.includes('web')) return '🌐';
-      if (n.includes('read') || n.includes('file')) return '📄';
-      if (n.includes('write') || n.includes('edit')) return '📝';
-      if (n.includes('exec') || n.includes('run') || n.includes('code')) return '⚡';
-      if (n.includes('patch') || n.includes('replace')) return '🔧';
-      if (n.includes('scan') || n.includes('image') || n.includes('vision')) return '👁️';
-      if (n.includes('memory') || n.includes('mem')) return '🧠';
-      if (n.includes('mcp')) return '🔌';
-      return '🔧';
+    // 状态颜色
+    const statusColor = (s) => {
+      if (s === 'success' || s === 'completed') return '#22c55e';
+      if (s === 'error' || s === 'failed') return '#ef4444';
+      if (s === 'running' || s === 'in_progress') return '#3b82f6';
+      return '#6b7280'; // pending/unknown
     };
-
-    // Status color + emoji
-    const statusMeta = (s) => {
-      if (s === 'success' || s === 'completed') return { color: '#22c55e', emoji: '✅', cls: 'tf-success' };
-      if (s === 'error' || s === 'failed') return { color: '#ef4444', emoji: '❌', cls: 'tf-error' };
-      if (s === 'running' || s === 'in_progress') return { color: '#f59e0b', emoji: '⏳', cls: 'tf-running' };
-      return { color: '#6b7280', emoji: '⏸️', cls: 'tf-pending' };
-    };
-
-    // Defs for glow filters
-    const defs = document.createElementNS(SVG_NS, 'defs');
-    const filter = document.createElementNS(SVG_NS, 'filter');
-    filter.setAttribute('id', 'tf-glow');
-    filter.setAttribute('x', '-20%'); filter.setAttribute('y', '-20%');
-    filter.setAttribute('width', '140%'); filter.setAttribute('height', '140%');
-    const blur = document.createElementNS(SVG_NS, 'feGaussianBlur');
-    blur.setAttribute('stdDeviation', '3'); blur.setAttribute('result', 'blur');
-    filter.appendChild(blur);
-    const merge = document.createElementNS(SVG_NS, 'feMerge');
-    const mn1 = document.createElementNS(SVG_NS, 'feMergeNode'); mn1.setAttribute('in', 'blur');
-    const mn2 = document.createElementNS(SVG_NS, 'feMergeNode'); mn2.setAttribute('in', 'SourceGraphic');
-    merge.appendChild(mn1); merge.appendChild(mn2);
-    filter.appendChild(merge);
-    defs.appendChild(filter);
-    svg.appendChild(defs);
 
     display.forEach((tc, i) => {
       const col = i % cols, row = Math.floor(i / cols);
       const x = gapX + col * (nodeW + gapX);
       const y = gapY + row * (nodeH + gapY);
-      const meta = statusMeta(tc.status || tc.state || 'success');
-      const color = meta.color;
-      const emoji = toolEmoji(tc.name || tc.tool);
-      const statusEm = meta.emoji;
+      const color = statusColor(tc.status || tc.state || 'success');
 
-      // Group for animation delay
-      const g = document.createElementNS(SVG_NS, 'g');
-      g.setAttribute('class', `tf-node-group ${meta.cls}`);
-      g.style.opacity = '0';
-      g.style.animation = `tfNodeAppear 0.4s ${i * 0.08}s cubic-bezier(0.34,1.56,0.64,1) forwards`;
-
-      // Connection line to next node
+      // 连线到下一个节点
       if (i < display.length - 1) {
         const nCol = (i + 1) % cols, nRow = Math.floor((i + 1) / cols);
         const nx = gapX + nCol * (nodeW + gapX) + nodeW / 2;
@@ -2893,74 +2391,46 @@
         line.setAttribute('x1', x + nodeW); line.setAttribute('y1', y + nodeH / 2);
         line.setAttribute('x2', nx); line.setAttribute('y2', ny);
         line.setAttribute('stroke', '#334155'); line.setAttribute('stroke-width', '1.5');
-        line.setAttribute('stroke-dasharray', '4,3');
-        line.setAttribute('class', 'tf-connector');
-        g.appendChild(line);
+        line.setAttribute('stroke-dasharray', '4,2');
+        svg.appendChild(line);
       }
 
-      // Shadow rect
-      const shadow = document.createElementNS(SVG_NS, 'rect');
-      shadow.setAttribute('x', x + 2); shadow.setAttribute('y', y + 2);
-      shadow.setAttribute('width', nodeW); shadow.setAttribute('height', nodeH);
-      shadow.setAttribute('rx', '10'); shadow.setAttribute('fill', 'rgba(0,0,0,0.3)');
-      g.appendChild(shadow);
-
-      // Main rect
+      // 节点圆角矩形
       const rect = document.createElementNS(SVG_NS, 'rect');
       rect.setAttribute('x', x); rect.setAttribute('y', y);
       rect.setAttribute('width', nodeW); rect.setAttribute('height', nodeH);
-      rect.setAttribute('rx', '10');
-      rect.setAttribute('fill', meta.cls === 'tf-running' ? '#1a2332' : '#1e293b');
+      rect.setAttribute('rx', '8'); rect.setAttribute('fill', '#1e293b');
       rect.setAttribute('stroke', color); rect.setAttribute('stroke-width', '1.5');
-      rect.setAttribute('class', 'tf-node-rect');
-      if (meta.cls === 'tf-running') rect.setAttribute('filter', 'url(#tf-glow)');
-      g.appendChild(rect);
+      svg.appendChild(rect);
 
-      // Tool emoji
-      const emojiText = document.createElementNS(SVG_NS, 'text');
-      emojiText.setAttribute('x', x + 14); emojiText.setAttribute('y', y + nodeH / 2 + 5);
-      emojiText.setAttribute('font-size', '13');
-      emojiText.textContent = emoji;
-      g.appendChild(emojiText);
+      // 状态圆点
+      const dot = document.createElementNS(SVG_NS, 'circle');
+      dot.setAttribute('cx', x + 12); dot.setAttribute('cy', y + nodeH / 2);
+      dot.setAttribute('r', '4'); dot.setAttribute('fill', color);
+      svg.appendChild(dot);
 
-      // Tool name
+      // 工具名文字
       const text = document.createElementNS(SVG_NS, 'text');
-      text.setAttribute('x', x + 30); text.setAttribute('y', y + nodeH / 2 - 2);
+      text.setAttribute('x', x + 22); text.setAttribute('y', y + nodeH / 2 + 4);
       text.setAttribute('fill', '#e2e8f0'); text.setAttribute('font-size', '10');
       text.setAttribute('font-family', 'monospace');
-      const name = (tc.name || tc.tool || 'tool').substring(0, 10);
+      const name = (tc.name || tc.tool || 'tool').substring(0, 12);
       text.textContent = name;
-      g.appendChild(text);
-
-      // Status indicator
-      const statusText = document.createElementNS(SVG_NS, 'text');
-      statusText.setAttribute('x', x + 30); statusText.setAttribute('y', y + nodeH / 2 + 12);
-      statusText.setAttribute('fill', color); statusText.setAttribute('font-size', '9');
-      statusText.textContent = statusEm + ' ' + (tc.status || 'done');
-      g.appendChild(statusText);
-
-      // Tooltip title
-      const title = document.createElementNS(SVG_NS, 'title');
-      const detail = tc.args ? JSON.stringify(tc.args).substring(0, 120) : '';
-      title.textContent = (tc.name || tc.tool) + '\n' + detail;
-      rect.appendChild(title);
-
-      svg.appendChild(g);
+      svg.appendChild(text);
     });
 
-    // "More" indicator
+    // 折叠指示
     if (hasMore) {
       const more = document.createElementNS(SVG_NS, 'text');
-      more.setAttribute('x', svgW / 2); more.setAttribute('y', svgH - 6);
+      more.setAttribute('x', svgW / 2); more.setAttribute('y', svgH - 4);
       more.setAttribute('fill', '#94a3b8'); more.setAttribute('font-size', '11');
       more.setAttribute('text-anchor', 'middle');
-      more.textContent = `▼ 展开剩余 ${toolCalls.length - TOOL_FLOW_MAX} 步`;
+      more.textContent = `...+${toolCalls.length - TOOL_FLOW_MAX} 步`;
       svg.appendChild(more);
     }
 
     return svg;
   }
-
 
   // 注入Tool Flow到消息气泡
   function injectToolFlow(msgEl, toolCalls) {
@@ -2978,8 +2448,8 @@
     container.addEventListener('click', () => {
       container.classList.toggle('tool-flow-collapsed');
     });
-    // 默认展开(≤50步)或折叠(>50步)
-    if (toolCalls.length > 50) container.classList.add('tool-flow-collapsed');
+    // 默认展开(≤5步)或折叠(>5步)
+    if (toolCalls.length > 5) container.classList.add('tool-flow-collapsed');
 
     // 插入到消息内容之后
     const contentEl = msgEl.querySelector('.msg-content') || msgEl.querySelector('.message-content');
@@ -2987,149 +2457,46 @@
     else msgEl.appendChild(container);
   }
 
-  /* ═════ T3.4.3: Enhanced Keyboard Shortcuts ═════ */
-  const SHORTCUTS = [
-    { key: 'Ctrl+N', desc: '新建会话', action: () => document.getElementById('btn-new-chat')?.click() },
-    { key: 'Ctrl+K', desc: '聚焦输入/搜索', action: () => { if(inputEl) inputEl.focus(); } },
-    { key: 'Ctrl+L', desc: '切换右侧面板', action: () => { 
-      const panel = document.getElementById('context-panel') || document.querySelector('.right-panel');
-      if(panel) panel.classList.toggle('panel-hidden');
-    }},
-    { key: 'Ctrl+/', desc: '快捷键帮助', action: () => _toggleShortcutHelp() },
-    { key: 'Ctrl+Shift+M', desc: '切换Composer模式', action: () => {
-      const modes = ['chat','plan','auto','analyze'];
-      const bar = document.querySelector('.composer-mode-bar');
-      if(!bar) return;
-      const active = bar.querySelector('.composer-mode-btn.active');
-      const curIdx = active ? modes.indexOf(active.dataset.mode) : 0;
-      const nextIdx = (curIdx + 1) % modes.length;
-      const btns = bar.querySelectorAll('.composer-mode-btn');
-      btns.forEach(b => b.classList.remove('active'));
-      btns[nextIdx]?.classList.add('active');
-      window.__composerMode = modes[nextIdx];
-      _showToast(`模式切换: ${modes[nextIdx]}`, 'info');
-    }},
-    { key: 'Ctrl+Shift+C', desc: '能力报告', action: () => document.getElementById('btn-capability-report')?.click() },
-    { key: 'Ctrl+Shift+R', desc: '刷新能力报告', action: () => {
-      document.getElementById('btn-capability-report')?.click();
-      _showToast('正在刷新能力报告...', 'info');
-    }},
-    { key: 'Ctrl+↑/↓', desc: '切换会话', action: null },
-    { key: 'Escape', desc: '停止生成/关闭弹窗', action: null },
-    { key: 'Ctrl+Enter', desc: '发送消息', action: () => {
-      if(inputEl && inputEl.value.trim()) {
-        const sendBtn = document.getElementById('btn-send');
-        if(sendBtn) sendBtn.click();
-      }
-    }},
-  ];
-
-  function _showToast(msg, type='info') {
-    const existing = document.querySelector('.shortcut-toast');
-    if(existing) existing.remove();
-    const toast = document.createElement('div');
-    toast.className = `shortcut-toast toast-enter ${type}`;
-    toast.innerHTML = `<span class="toast-icon">${type==='info'?'💡':'✅'}</span><span>${msg}</span>`;
-    toast.style.cssText = 'position:fixed;bottom:80px;right:20px;padding:10px 18px;border-radius:10px;font-size:13px;z-index:9999;display:flex;align-items:center;gap:8px;background:rgba(30,41,59,0.95);border:1px solid rgba(255,255,255,0.1);color:#e2e8f0;backdrop-filter:blur(8px);box-shadow:0 8px 24px rgba(0,0,0,0.3);';
-    document.body.appendChild(toast);
-    setTimeout(() => { toast.classList.remove('toast-enter'); toast.classList.add('toast-exit'); setTimeout(() => toast.remove(), 300); }, 2000);
-  }
-
-  function _toggleShortcutHelp() {
-    const existing = document.getElementById('shortcut-help-overlay');
-    if(existing) { existing.remove(); return; }
-    const overlay = document.createElement('div');
-    overlay.id = 'shortcut-help-overlay';
-    overlay.style.cssText = 'position:fixed;inset:0;z-index:9998;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.5);backdrop-filter:blur(4px);';
-    overlay.innerHTML = `
-      <div style="background:#1e293b;border:1px solid rgba(255,255,255,0.1);border-radius:16px;padding:24px 28px;max-width:400px;width:90%;animation:composer-enter 0.3s ease-out;">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
-          <h3 style="color:#e2e8f0;font-size:16px;font-weight:600;">⌨️ 快捷键</h3>
-          <button onclick="this.closest('#shortcut-help-overlay').remove()" style="color:#94a3b8;background:none;border:none;cursor:pointer;font-size:18px;">✕</button>
-        </div>
-        <div style="display:flex;flex-direction:column;gap:8px;">
-          ${SHORTCUTS.map(s => `
-            <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;">
-              <span style="color:#cbd5e1;font-size:12px;">${s.desc}</span>
-              <kbd style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:3px 8px;font-size:11px;color:#94a3b8;font-family:monospace;">${s.key}</kbd>
-            </div>
-          `).join('')}
-        </div>
-        <div style="margin-top:12px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.06);color:#64748b;font-size:11px;text-align:center;">
-          按 Esc 或 Ctrl+/ 关闭
-        </div>
-      </div>`;
-    overlay.addEventListener('click', e => { if(e.target === overlay) overlay.remove(); });
-    document.body.appendChild(overlay);
-  }
-
+  /* ═════ T3.4.3: 快捷键体系 ═════ */
   function initKeyboardShortcuts() {
     document.addEventListener('keydown', (e) => {
       const ctrl = e.ctrlKey || e.metaKey;
-      const shift = e.shiftKey;
 
       // Ctrl+N: 新建会话
-      if (ctrl && !shift && e.key.toLowerCase() === 'n') {
+      if (ctrl && e.key === 'n') {
         e.preventDefault();
-        SHORTCUTS[0].action();
-        _showToast('新建会话');
+        const newBtn = document.getElementById('new-session-btn');
+        if (newBtn) newBtn.click();
       }
-      // Ctrl+K: 聚焦输入
-      if (ctrl && !shift && e.key.toLowerCase() === 'k') {
+
+      // Ctrl+K: 搜索经验(聚焦输入框)
+      if (ctrl && e.key === 'k') {
         e.preventDefault();
-        SHORTCUTS[1].action();
+        if (inputEl) inputEl.focus();
+        // 如果有搜索面板则切换
+        const searchPanel = document.getElementById('experience-search');
+        if (searchPanel) searchPanel.style.display = searchPanel.style.display === 'none' ? 'block' : 'none';
       }
-      // Ctrl+L: 切换面板
-      if (ctrl && !shift && e.key.toLowerCase() === 'l') {
+
+      // Ctrl+L: 切换右侧面板
+      if (ctrl && e.key === 'l') {
         e.preventDefault();
-        SHORTCUTS[2].action();
-        _showToast('切换面板');
+        const toggle = document.getElementById('panel-toggle');
+        if (toggle) toggle.click();
+        // fallback: 直接toggle panel
+        const panel = document.getElementById('context-panel') || document.querySelector('.right-panel');
+        if (panel) panel.classList.toggle('panel-hidden');
       }
-      // Ctrl+/: 快捷键帮助
-      if (ctrl && e.key === '/') {
-        e.preventDefault();
-        SHORTCUTS[3].action();
-      }
-      // Ctrl+Shift+M: Composer模式
-      if (ctrl && shift && e.key.toLowerCase() === 'm') {
-        e.preventDefault();
-        SHORTCUTS[4].action();
-      }
-      // Ctrl+Shift+C: 切换Context Panel
-      if (ctrl && shift && e.key.toLowerCase() === 'c') {
-        e.preventDefault();
-        if (typeof toggleContextPanel === 'function') toggleContextPanel();
-      }
-      // Ctrl+Shift+R: 刷新报告
-      if (ctrl && shift && e.key.toLowerCase() === 'r') {
-        e.preventDefault();
-        SHORTCUTS[6].action();
-      }
-      // Ctrl+Enter: 发送
-      if (ctrl && e.key === 'Enter') {
-        e.preventDefault();
-        SHORTCUTS[9].action();
-      }
-      // Ctrl+Up/Down: 切换会话
-      if (ctrl && e.key === 'ArrowUp') {
-        e.preventDefault();
-        const prev = document.querySelector('#session-list .session-item.active')?.previousElementSibling;
-        if(prev) prev.click();
-      }
-      if (ctrl && e.key === 'ArrowDown') {
-        e.preventDefault();
-        const next = document.querySelector('#session-list .session-item.active')?.nextElementSibling;
-        if(next) next.click();
-      }
-      // Esc: 停止/关闭
-      if (e.key === 'Escape' && !ctrl) {
-        const overlay = document.getElementById('shortcut-help-overlay');
-        if(overlay) { overlay.remove(); return; }
+
+      // Esc: 停止当前生成
+      if (e.key === 'Escape' && !e.ctrlKey) {
         const stopBtn = document.getElementById('stop-btn');
         if (stopBtn && stopBtn.style.display !== 'none') stopBtn.click();
       }
     });
-  }  /* ═════ T3.4.4: 响应式断点 ═════ */
+  }
+
+  /* ═════ T3.4.4: 响应式断点 ═════ */
   function initResponsive() {
     const mql1280 = window.matchMedia('(min-width: 1280px)');
     const mql768 = window.matchMedia('(min-width: 768px)');
@@ -3212,57 +2579,54 @@
     const panel = document.getElementById('preview-panel');
     if (!panel) return;
     const pid = panel.dataset.previewId;
-    wsSend('preview_response', { id: pid, approved });
+    wsSend({ type: 'preview_response', payload: { id: pid, approved } });
     panel.innerHTML = approved
       ? '<div class="preview-result approved">✅ 已批准，正在执行...</div>'
       : '<div class="preview-result rejected">❌ 已拒绝</div>';
     setTimeout(() => panel.remove(), approved ? 1500 : 800);
   };
 
-  // ── T4.2.5: Trust Level Selector (unified) ──
-  const trustLevelLabels = ['L0 完全信任', 'L1 预览提示', 'L2 需批准', 'L3 只读'];
+  // ── T4.2.5: Trust Level Selector ──
   function initTrustLevel() {
-    const saved = localStorage.getItem('ga_trust_level');
+    const saved = _storage.get('ga_trust_level');
     if (saved !== null) {
-      wsSend('set_trust_level', { level: parseInt(saved) });
+      wsSend({ type: 'set_trust_level', payload: { level: parseInt(saved) } });
     }
-    // Sync existing status bar trust-level-text
-    const levelText = document.getElementById('trust-level-text');
-    if (levelText && saved !== null) levelText.textContent = trustLevelLabels[parseInt(saved)] || 'L0';
+    // Add trust indicator to status bar
+    const bar = document.getElementById('status-bar');
+    if (bar && !document.getElementById('trust-indicator')) {
+      const ti = document.createElement('span');
+      ti.id = 'trust-indicator';
+      ti.className = 'trust-indicator';
+      ti.innerHTML = `🔒 <select id="trust-select" onchange="window._setTrust(this.value)">
+        <option value="0">L0 完全信任</option>
+        <option value="1">L1 预览提示</option>
+        <option value="2">L2 需批准</option>
+        <option value="3">L3 只读</option>
+      </select>`;
+      bar.appendChild(ti);
+      if (saved !== null) document.getElementById('trust-select').value = saved;
+    }
   }
   window._setTrust = function(level) {
-    localStorage.setItem('ga_trust_level', level);
-    wsSend('set_trust_level', { level: parseInt(level) });
-    const levelText = document.getElementById('trust-level-text');
-    if (levelText) levelText.textContent = trustLevelLabels[parseInt(level)] || 'L0';
-    showToast(`信任等级: ${trustLevelLabels[parseInt(level)]}`, 'info');
+    _storage.set('ga_trust_level', level);
+    wsSend({ type: 'set_trust_level', payload: { level: parseInt(level) } });
   };
-  window.showToast = showToast;  // expose for inline handlers
   initTrustLevel();
 
-  // ── T4.2: Execution Timeline Monitor (lives in Context Panel timeline tab) ──
+  // ── T4.2: Execution Timeline Monitor ──
   function _getOrCreateTimeline() {
     let tl = document.getElementById('exec-timeline');
     if (tl) return tl;
-    // Target: Context Panel's timeline tab pane
-    const timelinePane = document.querySelector('.ctx-tab-pane[data-pane="timeline"]');
-    if (timelinePane) {
-      timelinePane.innerHTML = `
-        <div class="px-4 py-3">
-          <div class="flex items-center justify-between mb-3">
-            <span class="text-[10px] font-medium text-white/40 uppercase tracking-wider">执行时间线</span>
-            <button class="text-[10px] text-white/25 hover:text-white/60 transition" onclick="window._clearTimeline()">清除</button>
-          </div>
-          <div id="exec-timeline" class="space-y-1.5 max-h-[400px] overflow-y-auto ctx-scroll-area"></div>
-        </div>`;
-      return document.getElementById('exec-timeline');
-    }
-    // Fallback: floating monitor
+    // Find sidebar panel for timeline
+    const sidebar = document.querySelector('.sidebar') || document.querySelector('#sidebar');
+    if (!sidebar) { console.warn('[timeline] no sidebar found'); return null; }
+    // Create timeline container
     const section = document.createElement('div');
     section.id = 'exec-timeline-section';
     section.className = 'exec-timeline-section';
     section.innerHTML = `<div class="exec-tl-header"><span>📡 执行监控</span><button class="exec-tl-clear" onclick="window._clearTimeline()">✕</button></div><div id="exec-timeline" class="exec-timeline"></div>`;
-    document.getElementById('app')?.appendChild(section);
+    sidebar.appendChild(section);
     return document.getElementById('exec-timeline');
   }
   window._clearTimeline = function() {
@@ -3273,10 +2637,6 @@
   function appendTimelineStep(step) {
     const tl = _getOrCreateTimeline();
     if (!tl) return;
-    // Auto-switch Context Panel to timeline tab on first step
-    if (step.step === 1 && typeof switchCtxTab === 'function') {
-      switchCtxTab('timeline');
-    }
     const statusColors = { running: '#fbbf24', success: '#34d399', error: '#f87171' };
     const statusIcons = { running: '⏳', success: '✅', error: '❌' };
     const color = statusColors[step.status] || '#64748b';
@@ -3312,400 +2672,44 @@
   }
 
   // ── T4.3.4: Capability Report ──
-    /* ─ T4.3.4: Enhanced Capability Report with progress bars ─ */
   function _renderCapCards(report) {
     const container = document.getElementById('capability-report-cards');
     if (!container || !report) return;
-    const esc = s => typeof s === 'string' ? s.replace(/</g,'&lt;') : JSON.stringify(s);
-    // Extract data
-    const r = report || {};
-    const memoryLayers = r.memory_layers || [];
-    const tools = r.tools || [];
-    const toolsCount = r.tools_count || 0;
-    const mcp = r.mcp || {};
-    const sops = r.sops || [];
-    const sopsCount = r.sops_count || 0;
-    const devices = r.devices || [];
-    const devicesCount = r.devices_count || 0;
-    // Progress bar helper
-    function pbar(pct, label, detail) {
-      const clamped = Math.min(100, Math.max(0, pct));
-      const color = clamped >= 80 ? '#04b84c' : clamped >= 50 ? '#fbbf24' : '#64748b';
-      return `<div class="cap-progress-row">
-        <div class="cap-progress-label">${label}</div>
-        <div class="cap-progress-detail">${detail || ''}</div>
-        <div class="cap-progress-bar">
-          <div class="cap-progress-fill" style="width:${clamped}%;background:${color}"></div>
-        </div>
-      </div>`;
-    }
-    // Section helper
-    function section(icon, title, content) {
-      return `<div class="cap-section">
-        <div class="cap-section-title"><span>${icon}</span> ${title}</div>
-        ${content}
-      </div>`;
-    }
-    let html = '<div class="cap-report-header">📊 GenericAgent 能力概览</div>';
-    // 1. Memory System (from actual memory_layers data)
-    html += section('🧠', '记忆系统',
-      memoryLayers.map(l => {
-        const count = l.count || 0;
-        const size = l.size ? ` (${(l.size/1024).toFixed(0)}KB)` : '';
-        return pbar(Math.min(100, count * 2), `${l.layer} ${l.name}`, `${count} 条${size}`);
-      }).join('') || '<div class="text-frost-400 text-[12px] p-2">无记忆层数据</div>'
-    );
-    // 2. Tool Capabilities (from actual tools list)
-    html += section('🔧', `工具能力 (${toolsCount})`,
-      tools.slice(0, 12).map(t =>
-        `<div class="cap-tool-row">
-          <span class="cap-tool-icon">⚡</span>
-          <div class="cap-tool-info">
-            <div class="cap-tool-name">${esc(t.name)}</div>
-            <div class="cap-tool-detail">${esc(t.description || '')}</div>
-          </div>
-        </div>`
-      ).join('') || '<div class="text-frost-400 text-[12px] p-2">无工具数据</div>'
-    );
-    // 3. MCP Extensions (from actual mcp data)
-    const mcpServers = mcp.servers || [];
-    const mcpToolsCount = mcp.tools_count || 0;
-    html += section('🔌', `MCP 扩展 (${mcpServers.length} 服务器, ${mcpToolsCount} 工具)`,
-      `<div class="cap-mcp-stats">
-        <div class="cap-mcp-stat">
-          <span class="cap-mcp-dot online"></span>
-          <span>${mcpServers.length} 服务器: ${mcpServers.map(s => esc(s)).join(', ')}</span>
-        </div>
-        <div class="cap-mcp-stat">📊 可用工具: ${mcpToolsCount}个</div>
-        ${(mcp.tool_names || []).slice(0, 8).map(n => `<span class="mcp-tool-tag">${esc(n)}</span>`).join('')}
-      </div>`
-    );
-    // 4. Autonomous Capabilities
-    const autoCaps = [
-      { name: '任务规划', status: '✅' },
-      { name: '反思复盘', status: '✅' },
-      { name: '定时任务', status: '✅' },
-      { name: '多步骤执行', status: '✅' },
-      { name: '子代理', status: '⚠️', note: '实验性' },
+    container.classList.remove('hidden');
+    const sections = [
+      { key: 'tools', label: '🔧 工具', icon: 'wrench', color: 'brand' },
+      { key: 'mcp_servers', label: '🌐 MCP 服务', icon: 'globe', color: 'accent-violet' },
+      { key: 'sops', label: '📖 SOP', icon: 'book-open', color: 'accent-pink' },
+      { key: 'devices', label: '📱 设备', icon: 'smartphone', color: 'emerald' },
+      { key: 'memory_layers', label: '🧠 记忆层', icon: 'brain', color: 'amber' },
     ];
-    const autoHtml = `<div class="cap-auto-grid">${autoCaps.map(c =>
-      `<div class="cap-auto-item">
-        <span>${c.status}</span> ${c.name}${c.note ? `<span class="cap-auto-note">${c.note}</span>` : ''}
-      </div>`
-    ).join('')}</div>`;
-    html += section('🤖', '自主能力', autoHtml);
-    // Footer buttons
-    html += `<div class="cap-report-footer">
-      <button class="cap-btn" id="btn-export-report">📤 导出报告</button>
-      <button class="cap-btn cap-btn-secondary" id="btn-refresh-report">🔄 刷新</button>
-    </div>`;
-    container.innerHTML = html;
-    // Animate progress bars
-    container.querySelectorAll('.cap-progress-fill').forEach((bar, i) => {
-      const w = bar.style.width;
-      bar.style.width = '0%';
-      setTimeout(() => { bar.style.width = w; }, 100 + i * 80);
-    });
-    // Bind export
-    container.querySelector('#btn-export-report')?.addEventListener('click', () => {
-      const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' });
-      const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
-      a.download = 'capability_report.json'; a.click();
-      showToast('报告已导出', 'success');
-    });
-    container.querySelector('#btn-refresh-report')?.addEventListener('click', () => {
-      document.getElementById('btn-capability-report')?.click();
-    });
+    let html = '';
+    for (const s of sections) {
+      const items = report[s.key] || [];
+      if (!items.length && s.key !== 'memory_layers') continue;
+      const count = s.key === 'memory_layers' ? (report.memory_layers_count || 0) : items.length;
+      html += `<div class="rounded-xl bg-white/4 border border-white/8 p-4">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-[13px] font-semibold text-frost-100">${s.label}</span>
+          <span class="text-[11px] px-2 py-0.5 rounded-full bg-${s.color}-400/15 text-${s.color}-300">${count}</span>
+        </div>
+        <div class="flex flex-wrap gap-1.5">${items.map(i =>
+          `<span class="text-[11px] px-2 py-0.5 rounded-md bg-white/6 text-frost-300">${typeof i === 'string' ? i : i.name || i.title || JSON.stringify(i)}</span>`
+        ).join('')}</div>
+      </div>`;
+    }
+    container.innerHTML = html || '<p class="text-frost-400 text-[12px]">暂无能力数据</p>';
   }
+
   // Button click
   document.getElementById('btn-capability-report')?.addEventListener('click', function() {
     this.disabled = true;
     this.innerHTML = '<span class="animate-spin inline-block w-4 h-4 border-2 border-frost-300 border-t-transparent rounded-full"></span> 扫描中...';
-    API.send('action', { name: 'capability_report' });
+    wsSend({ type: 'capability_report' });
     setTimeout(() => {
       this.disabled = false;
       this.innerHTML = '<i data-lucide="scan" class="w-4 h-4"></i>扫描当前能力';
       if (window.lucide) lucide.createIcons();
     }, 2000);
   });
-
-  // ── C7: Edge Fade scroll detection ──
-  if (messagesEl) {
-    const updateScrollClass = () => {
-      const { scrollTop, scrollHeight, clientHeight } = messagesEl;
-      messagesEl.classList.toggle('scroll-top', scrollTop < 8);
-      messagesEl.classList.toggle('scroll-bottom', scrollTop + clientHeight >= scrollHeight - 8);
-    };
-    messagesEl.addEventListener('scroll', updateScrollClass, { passive: true });
-    updateScrollClass();
-    const _origMsgObserver = new MutationObserver(() => setTimeout(updateScrollClass, 100));
-    _origMsgObserver.observe(messagesEl, { childList: true, subtree: true });
-  }
-
-  // ── C8: Digit rolling animation for status bar counters ──
-  const _rollingTargets = [sbTurn, sbExp, sbPref, sbTools, sbErr].filter(Boolean);
-  _rollingTargets.forEach(el => {
-    let _prevVal = el.textContent;
-    new MutationObserver(() => {
-      const newVal = el.textContent;
-      if (newVal === _prevVal) return;
-      _prevVal = newVal;
-      el.classList.remove('sb-rolling');
-      void el.offsetWidth;
-      el.classList.add('sb-rolling');
-      el.addEventListener('animationend', () => el.classList.remove('sb-rolling'), { once: true });
-    }).observe(el, { childList: true, characterData: true, subtree: true });
-  });
 })();
-
-  // ── Phase 3: Execution Monitor ──
-  function renderExecutionMonitor(steps) {
-    let el = document.getElementById('execution-monitor');
-    if (!el) {
-      el = document.createElement('div');
-      el.id = 'execution-monitor';
-      el.className = 'execution-monitor';
-      const chatArea = document.getElementById('messages');
-      if (chatArea) chatArea.prepend(el);
-    }
-    if (!steps || !steps.length) { el.innerHTML = ''; return; }
-    const stats = steps[steps.length - 1] || {};
-    const completed = steps.filter(s => s.status === 'done').length;
-    const total = steps.length;
-    const pct = total > 0 ? Math.round(completed / total * 100) : 0;
-
-    el.innerHTML = `
-      <div class="exec-monitor-header">
-        <span>⚡ 执行监控</span>
-        <span class="exec-monitor-pct">${pct}%</span>
-      </div>
-      <div class="exec-progress-bar">
-        <div class="exec-progress-fill" style="width:${pct}%"></div>
-      </div>
-      <div class="exec-steps">
-        ${steps.map((s, i) => `
-          <div class="exec-step exec-step-${s.status || 'pending'}">
-            <span class="exec-step-icon">${s.status === 'done' ? '✅' : s.status === 'running' ? '⏳' : s.status === 'error' ? '❌' : '⏸️'}</span>
-            <span class="exec-step-name">${_esc(s.name || s.tool || 'Step ' + (i+1))}</span>
-            ${s.duration ? `<span class="exec-step-time">${s.duration}ms</span>` : ''}
-          </div>
-        `).join('')}
-      </div>
-      ${stats.tokens ? `<div class="exec-stats">📊 Tokens: ${stats.tokens} · ⏱ 耗时: ${stats.elapsed || 0}s</div>` : ''}
-    `;
-    // Animate progress bar
-    const fill = el.querySelector('.exec-progress-fill');
-    if (fill) {
-      const w = fill.style.width;
-      fill.style.width = '0%';
-      requestAnimationFrame(() => { fill.style.width = w; });
-    }
-  }
-
-  // ── Phase 3: Composer Mode Switcher ──
-  const composerModes = [
-    { id: 'chat', icon: '💬', label: '对话模式', desc: '自由问答' },
-    { id: 'plan', icon: '📋', label: '规划模式', desc: '先制定计划再执行' },
-    { id: 'auto', icon: '🔄', label: '自动模式', desc: '自主执行+定期汇报' },
-    { id: 'analyze', icon: '🔍', label: '分析模式', desc: '只分析不操作' },
-  ];
-  let currentComposerMode = 'chat';
-
-  function initComposerModeSwitcher() {
-    const inputArea = document.querySelector('.composer-bar') || document.getElementById('input-area');
-    if (!inputArea) return;
-    // Add mode indicator before input
-    const modeEl = document.createElement('div');
-    modeEl.className = 'composer-mode-bar';
-    modeEl.innerHTML = composerModes.map(m =>
-      `<button class="composer-mode-btn ${m.id === currentComposerMode ? 'active' : ''}" data-mode="${m.id}" title="${m.desc}">${m.icon} ${m.label}</button>`
-    ).join('');
-    inputArea.parentElement.insertBefore(modeEl, inputArea);
-    modeEl.querySelectorAll('.composer-mode-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        currentComposerMode = btn.dataset.mode;
-        modeEl.querySelectorAll('.composer-mode-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === currentComposerMode));
-        showToast(`模式: ${composerModes.find(m => m.id === currentComposerMode).label}`, 'info');
-      });
-    });
-  }
-  initComposerModeSwitcher();
-
-
-  /* ═════ Phase 4.2: Theme Switcher ═════ */
-  function initThemeSwitcher() {
-    const saved = localStorage.getItem('ga-theme') || 'dark';
-    document.documentElement.setAttribute('data-theme', saved);
-    
-    // Add theme toggle button to header if not exists
-    const header = document.querySelector('.header-bar');
-    if (header && !document.getElementById('theme-toggle-rail')) {
-      const btn = document.createElement('button');
-      btn.id = 'theme-toggle-btn';
-      btn.title = '切换主题 (Ctrl+Shift+T)';
-      btn.setAttribute('aria-label', '切换明暗主题');
-      btn.style.cssText = 'background:none;border:1px solid var(--border-default);border-radius:8px;padding:6px 8px;cursor:pointer;color:var(--text-secondary);font-size:14px;transition:all 0.2s;';
-      btn.innerHTML = saved === 'dark' ? '☀️' : '🌙';
-      btn.addEventListener('click', () => toggleTheme());
-      header.appendChild(btn);
-    }
-  }
-  
-  function toggleTheme() {
-    const current = document.documentElement.getAttribute('data-theme') || 'dark';
-    const next = current === 'dark' ? 'light' : 'dark';
-    document.documentElement.setAttribute('data-theme', next);
-    localStorage.setItem('ga-theme', next);
-    const btn = document.getElementById('theme-toggle-rail');
-    if (btn) btn.innerHTML = next === 'dark' ? '☀️' : '🌙';
-    showToast(next === 'dark' ? '🌙 已切换到暗色主题' : '☀️ 已切换到亮色主题');
-  }
-
-  /* ═════ Phase 4.3: Accessibility (a11y) ═════ */
-  function initAccessibility() {
-    // Add ARIA live region for dynamic content announcements
-    if (!document.getElementById('a11y-live')) {
-      const live = document.createElement('div');
-      live.id = 'a11y-live';
-      live.setAttribute('role', 'status');
-      live.setAttribute('aria-live', 'polite');
-      live.setAttribute('aria-atomic', 'true');
-      live.style.cssText = 'position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;';
-      document.body.appendChild(live);
-    }
-    
-    // Add skip-to-content link
-    if (!document.getElementById('skip-link')) {
-      const skip = document.createElement('a');
-      skip.id = 'skip-link';
-      skip.href = '#messages-container';
-      skip.textContent = '跳转到消息区域';
-      skip.style.cssText = 'position:absolute;top:-40px;left:0;background:var(--brand-primary);color:#fff;padding:8px 16px;z-index:9999;transition:top 0.2s;';
-      skip.addEventListener('focus', () => skip.style.top = '0');
-      skip.addEventListener('blur', () => skip.style.top = '-40px');
-      document.body.insertBefore(skip, document.body.firstChild);
-    }
-    
-    // Add focus-visible polyfill styles
-    document.querySelectorAll('button, a, input, textarea, select, [tabindex]').forEach(el => {
-      if (!el.hasAttribute('tabindex')) el.setAttribute('tabindex', '0');
-    });
-    
-    // Announce new messages for screen readers
-    const origAppend = window._origAppendMsg;
-    if (origAppend) {
-      const origFn = origAppend;
-      // Announcement handled in message rendering
-    }
-    
-    // Focus trap for modals
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'Tab') {
-        const modal = document.querySelector('.shortcut-help-modal[style*="display: flex"]') || 
-                      document.querySelector('.modal-overlay[style*="display: flex"]');
-        if (modal) trapFocus(modal, e);
-      }
-    });
-  }
-  
-  function trapFocus(container, event) {
-    const focusable = container.querySelectorAll(
-      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
-    );
-    const first = focusable[0];
-    const last = focusable[focusable.length - 1];
-    
-    if (event.shiftKey) {
-      if (document.activeElement === first) {
-        last.focus();
-        event.preventDefault();
-      }
-    } else {
-      if (document.activeElement === last) {
-        first.focus();
-        event.preventDefault();
-      }
-    }
-  }
-  
-  function announceForA11y(text) {
-    const live = document.getElementById('a11y-live');
-    if (live) {
-      live.textContent = '';
-      requestAnimationFrame(() => { live.textContent = text; });
-    }
-  }
-
-  /* ═════ Phase 4.4: Final Polish ═════ */
-  function initFinalPolish() {
-    // Smooth scroll to bottom on new messages
-    const container = document.getElementById('messages');
-    if (container) {
-      const observer = new MutationObserver((mutations) => {
-        const wasAtBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - 60;
-        if (wasAtBottom) {
-          for (const m of mutations) {
-            if (m.addedNodes.length) {
-              requestAnimationFrame(() => {
-                container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
-              });
-              break;
-            }
-          }
-        }
-      });
-      observer.observe(container, { childList: true, subtree: true });
-    }
-    
-    // Add loading shimmer to pending messages
-    document.querySelectorAll('.msg-bubble.pending').forEach(el => {
-      el.style.position = 'relative';
-      el.style.overflow = 'hidden';
-    });
-    
-    // Ensure proper focus management
-    const _inputEl = document.getElementById('input');
-    if (_inputEl) {
-      _inputEl.addEventListener('focus', () => {
-        _inputEl.parentElement?.classList.add('input-focused');
-      });
-      _inputEl.addEventListener('blur', () => {
-        _inputEl.parentElement?.classList.remove('input-focused');
-      });
-    }
-    
-    // Global focus-visible styles
-    const style = document.createElement('style');
-    style.textContent = `
-      *:focus-visible {
-        outline: 2px solid var(--brand-primary, #10a37f);
-        outline-offset: 2px;
-      }
-      *:focus:not(:focus-visible) {
-        outline: none;
-      }
-      @media (prefers-reduced-motion: reduce) {
-        *, *::before, *::after {
-          animation-duration: 0.01ms !important;
-          animation-iteration-count: 1 !important;
-          transition-duration: 0.01ms !important;
-        }
-      }
-    `;
-    document.head.appendChild(style);
-  }
-
-  // Initialize Phase 4 on DOM ready
-  document.addEventListener('DOMContentLoaded', () => {
-    initThemeSwitcher();
-    initAccessibility();
-    initFinalPolish();
-  });
-  
-  // Also run immediately if DOM already loaded
-  if (document.readyState !== 'loading') {
-    initThemeSwitcher();
-    initAccessibility();
-    initFinalPolish();
-  }
-

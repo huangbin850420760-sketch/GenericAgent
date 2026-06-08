@@ -328,11 +328,18 @@ class GenericAgent:
                                 handler, TOOLS_SCHEMA, max_turns=80, verbose=self.verbose,
                                 initial_user_content=initial_content, yield_info=True))
             try:
-                full_resp = ""; last_pos = 0
+                full_resp = ""; last_pos = 0; curr_turn = 0; turn_resps = []
                 for chunk in gen:
                     if consume_file(self.task_dir, '_stop'): self.abort() 
                     if self.stop_sig: break
-                    if isinstance(chunk, dict): continue  # yield_info dict, skip
+                    if isinstance(chunk, dict):
+                        # yield_info dict from agent_runner_loop: {'turn': N}
+                        if 'turn' in chunk:
+                            curr_turn = chunk['turn']
+                            if curr_turn > 0 and turn_resps and turn_resps[-1] is None:
+                                turn_resps[-1] = full_resp  # finalize prev turn
+                            turn_resps.append(None)  # placeholder for current turn
+                        continue
                     full_resp += chunk
                     if len(full_resp) - last_pos > 50 or 'LLM Running' in chunk:
                         display_queue.put({'next': full_resp[last_pos:] if self.inc_out else full_resp, 'source': source})

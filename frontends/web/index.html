@@ -168,58 +168,12 @@
         <div class="flex items-center gap-3 min-w-0 flex-1">
           <span id="conversation-title" class="text-white/80 font-medium truncate text-[14px]">新对话</span>
         </div>
-        <!-- T1.5.1: 记忆指示器 🧠 3层徽章 -->
-        <div id="header-memory" class="header-memory-indicator" title="记忆状态概览">
-          <button class="mem-badge" data-layer="memory" id="hb-memory">
-            <span class="mem-badge-icon">🧠</span>
-            <span class="mem-badge-count" id="hb-memory-count">0</span>
-          </button>
-          <button class="mem-badge" data-layer="sop" id="hb-sop">
-            <span class="mem-badge-icon">🔧</span>
-            <span class="mem-badge-count" id="hb-sop-count">0</span>
-          </button>
-          <button class="mem-badge" data-layer="tools" id="hb-tools">
-            <span class="mem-badge-icon">⚡</span>
-            <span class="mem-badge-count" id="hb-tools-count">0</span>
-          </button>
-          <!-- Popover -->
-          <div class="mem-popover" id="mem-popover">
-            <div class="mem-popover-header">
-              <span>记忆状态</span>
-              <span class="mem-popover-close" id="mem-popover-close">✕</span>
-            </div>
-            <div class="mem-popover-body">
-              <div class="mem-popover-row">
-                <span class="mem-popover-label">🧠 活跃记忆</span>
-                <span class="mem-popover-value" id="mp-memory">0 / 0</span>
-              </div>
-              <div class="mem-popover-row">
-                <span class="mem-popover-label">📋 SOP文档</span>
-                <span class="mem-popover-value" id="mp-sop">0</span>
-              </div>
-              <div class="mem-popover-row">
-                <span class="mem-popover-label">⚙️ 工具/技能</span>
-                <span class="mem-popover-value" id="mp-tools">0</span>
-              </div>
-              <div class="mem-popover-row">
-                <span class="mem-popover-label">📊 经验条目</span>
-                <span class="mem-popover-value" id="mp-exp">0</span>
-              </div>
-              <div class="mem-popover-row">
-                <span class="mem-popover-label">🎯 用户偏好</span>
-                <span class="mem-popover-value" id="mp-pref">0</span>
-              </div>
-            </div>
-          </div>
+        <!-- T1.5.1: 记忆指示器 🧠 active/total -->
+        <div id="header-memory" class="flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px] font-mono text-white/50 hover:text-white/70 hover:bg-white/5 transition cursor-default select-none mr-2" title="记忆: 活跃/总计">
+          <span class="text-[13px]">🧠</span>
+          <span id="header-mem-count">0/0</span>
         </div>
 
-        <!-- T1.5.4: 模式切换按钮组 -->
-        <div id="mode-switcher" class="flex items-center gap-0.5 mr-2 bg-white/5 rounded-lg p-0.5">
-          <button data-mode="chat" class="mode-btn active px-2 py-0.5 rounded-md text-[10px] font-medium transition" title="对话模式">💬</button>
-          <button data-mode="plan" class="mode-btn px-2 py-0.5 rounded-md text-[10px] font-medium transition" title="规划模式">📋</button>
-          <button data-mode="auto" class="mode-btn px-2 py-0.5 rounded-md text-[10px] font-medium transition" title="自动模式">🔄</button>
-          <button data-mode="analyze" class="mode-btn px-2 py-0.5 rounded-md text-[10px] font-medium transition" title="分析模式">🔰</button>
-        </div>
         <div id="llm-selector" class="relative flex items-center gap-1 px-2.5 py-1 bg-white/5 hover:bg-white/8 rounded-lg cursor-pointer transition text-[11px] font-mono select-none shrink-0" title="切换模型">
           <span class="w-1.5 h-1.5 rounded-full bg-brand-400 shadow-[0_0_4px_rgba(74,158,255,0.6)]"></span>
           <span id="llm-name" class="max-w-[140px] truncate text-white/70">—</span>
@@ -228,89 +182,43 @@
         </div>
       </header>
 
-      <!-- ── Enhanced Status Bar (Codex-style) ── -->
-      <div id="status-bar" class="h-7 px-4 flex items-center gap-1 shrink-0 text-[11px] font-mono text-white/35" role="status" aria-label="运行状态栏">
-        <!-- 连接状态 -->
-        <span class="sb-segment" id="sb-conn">
-          <span id="status-dot" class="w-2 h-2 rounded-full idle"></span>
-          <span id="status-text" class="text-white/40">connecting</span>
-          <span class="sb-tooltip">WebSocket 连接状态</span>
+      <!-- T1.4.3 Status Bar: memory status + turn indicators -->
+      <div id="status-bar" class="h-6 px-5 flex items-center gap-3 border-b border-[#1f1f1f] shrink-0 text-[11px] font-mono select-none" style="background:var(--ga-bg-secondary);">
+        <!-- Agent status dot -->
+        <span class="flex items-center gap-1.5">
+          <span id="status-dot" class="w-1.5 h-1.5 rounded-full" style="background:var(--ga-status-idle);"></span>
+          <span id="status-text" class="text-white/35">idle</span>
         </span>
-        <span class="sb-divider"></span>
-        <!-- 对话轮次 -->
-        <span class="sb-segment" id="sb-turn-seg">
-          <i data-lucide="message-square" class="w-3 h-3"></i>
-          <span id="sb-turn" class="font-semibold">0</span>
-          <span class="sb-tooltip">本轮对话轮次</span>
+        <span class="text-white/10">│</span>
+        <!-- Turn counter -->
+        <span class="flex items-center gap-1 text-white/30">
+          <i data-lucide="repeat" class="w-3 h-3"></i>
+          <span id="status-turn">0</span>
         </span>
-        <span class="sb-divider"></span>
-        <!-- 经验沉淀 -->
-        <span class="sb-segment" id="sb-exp-seg">
-          <i data-lucide="gem" class="w-3 h-3"></i>
-          <span id="sb-exp">0</span>
-          <span class="sb-tooltip">已沉淀的经验 SOP</span>
+        <span class="text-white/10">│</span>
+        <!-- Experience badge -->
+        <span id="status-exp" class="flex items-center gap-1 text-white/30 transition-colors duration-200 cursor-default" title="本轮提取的经验数">
+          <i data-lucide="brain" class="w-3 h-3" style="color:var(--ga-memory-exp);"></i>
+          <span>0</span>
         </span>
-        <span class="sb-divider"></span>
-        <!-- 偏好规则 -->
-        <span class="sb-segment" id="sb-pref-seg">
-          <i data-lucide="heart" class="w-3 h-3"></i>
-          <span id="sb-pref">0</span>
-          <span class="sb-tooltip">已学习的偏好规则</span>
+        <!-- Preference badge -->
+        <span id="status-pref" class="flex items-center gap-1 text-white/30 transition-colors duration-200 cursor-default" title="已学习的偏好数">
+          <i data-lucide="heart" class="w-3 h-3" style="color:var(--ga-memory-pref);"></i>
+          <span>0</span>
         </span>
-        <span class="sb-divider"></span>
-        <!-- 记忆用量(mini bar) -->
-        <span class="sb-segment" id="sb-mem-seg">
-          <i data-lucide="brain" class="w-3 h-3"></i>
-          <span class="sb-memory-bar" id="sb-mem-bar">
-            <span class="sb-mb-seg" data-layer="l1"></span>
-            <span class="sb-mb-seg" data-layer="l2"></span>
-            <span class="sb-mb-seg" data-layer="l3"></span>
-            <span class="sb-mb-seg" data-layer="l4"></span>
-          </span>
-          <span id="sb-mem-count">0</span>
-          <span class="sb-tooltip">L1-L4 记忆层数据量</span>
+        <!-- Error recovery -->
+        <span id="status-err" class="hidden items-center gap-1 transition-colors duration-200 cursor-default" title="错误恢复策略已激活" style="color:var(--ga-warning);">
+          <i data-lucide="shield-alert" class="w-3 h-3"></i>
+          <span>recovery</span>
         </span>
-        <span class="sb-divider"></span>
-        <!-- 工具调用 -->
-        <span class="sb-segment" id="sb-tool-seg">
-          <i data-lucide="wrench" class="w-3 h-3"></i>
-          <span class="sb-tool-badge" id="sb-tools">0</span>
-          <span class="sb-tooltip">本轮工具调用次数</span>
-        </span>
-        <span class="sb-divider"></span>
-        <!-- 错误 -->
-        <span class="sb-segment" id="sb-err-seg">
-          <i data-lucide="alert-triangle" class="w-3 h-3"></i>
-          <span id="sb-err">0</span>
-          <span class="sb-tooltip">本轮错误计数</span>
-        </span>
+        <!-- Spacer -->
         <span class="flex-1"></span>
-        <!-- 耗时 -->
-        <span class="sb-segment">
-          <i data-lucide="clock" class="w-3 h-3"></i>
-          <span id="sb-duration" class="sb-duration">00:00</span>
-          <span class="sb-tooltip">本次会话耗时</span>
-        </span>
-        <span class="sb-divider"></span>
-        <span class="sb-segment" id="trust-indicator">
-          <i data-lucide="shield" class="w-3 h-3"></i>
-          <select id="trust-select" onchange="window._setTrust(this.value)" class="bg-transparent border-none outline-none text-[11px] font-mono text-white/35 cursor-pointer" aria-label="信任等级">
-            <option value="0">L0 完全信任</option>
-            <option value="1">L1 预览提示</option>
-            <option value="2">L2 需批准</option>
-            <option value="3">L3 只读</option>
-          </select>
-        </span>
+        <!-- Tools used this turn -->
+        <span id="status-tools" class="text-white/20 truncate max-w-[200px]"></span>
       </div>
 
       <!-- ─── Chat view ─── -->
-      
-  <!-- Skip link for accessibility -->
-  <a href="#input" id="skip-link" class="skip-link">Skip to main content</a>
-  <!-- Aria live region for screen readers -->
-  <div id="a11y-live" class="sr-only" aria-live="polite" aria-atomic="true"></div>
-
-<main id="view-chat" role="main" aria-label="对话区域" class="flex-1 flex flex-col min-h-0 overflow-hidden">
+      <main id="view-chat" role="main" aria-label="对话区域" class="flex-1 flex flex-col min-h-0 overflow-hidden">
         <div id="messages" class="flex-1 overflow-y-auto px-6 md:px-10 pt-12 pb-8 scroll-smooth">
           <div class="welcome flex flex-col items-center justify-center min-h-[70%] text-center gap-3 select-none">
             <div class="relative mb-4">
@@ -326,31 +234,19 @@
               <span><kbd class="kbd">Shift</kbd>+<kbd class="kbd">Enter</kbd> 换行</span>
               <span><kbd class="kbd">Esc</kbd> 停止</span>
             </div>
-            <!-- Quick Actions -->
-            <div class="welcome-quick-actions flex flex-wrap items-center justify-center gap-2 mt-4">
-              <button class="qa-chip" data-qa="capabilities" title="查看当前Agent能力报告">
-                <i data-lucide="shield-check" class="w-3.5 h-3.5"></i>
-                <span>能力报告</span>
-              </button>
-              <button class="qa-chip" data-qa="memory" title="查看记忆面板">
-                <i data-lucide="brain" class="w-3.5 h-3.5"></i>
-                <span>记忆状态</span>
-              </button>
-              <button class="qa-chip" data-qa="skills" title="探索能力库">
-                <i data-lucide="package" class="w-3.5 h-3.5"></i>
-                <span>能力库</span>
-              </button>
-              <button class="qa-chip" data-qa="schedule" title="查看定时任务">
-                <i data-lucide="calendar-clock" class="w-3.5 h-3.5"></i>
-                <span>定时任务</span>
-              </button>
-            </div>
           </div>
         </div>
 
         <!-- Input area -->
         <footer id="input-area" class="relative px-6 md:px-10 pt-4 pb-6 shrink-0">
           <div class="max-w-3xl mx-auto">
+          <!-- 模式切换标签 -->
+          <div id="mode-switcher" class="flex items-center gap-0.5 mb-3 bg-white/5 rounded-lg p-0.5 w-fit">
+            <button data-mode="chat" class="mode-btn active px-2.5 py-1 rounded-md text-[11px] font-medium transition" title="对话模式">💬 对话</button>
+            <button data-mode="plan" class="mode-btn px-2.5 py-1 rounded-md text-[11px] font-medium transition" title="规划模式">📋 规划</button>
+            <button data-mode="auto" class="mode-btn px-2.5 py-1 rounded-md text-[11px] font-medium transition" title="自动模式">🔄 自动</button>
+            <button data-mode="analyze" class="mode-btn px-2.5 py-1 rounded-md text-[11px] font-medium transition" title="分析模式">🔰 分析</button>
+          </div>
           <div id="attachments" class="flex flex-wrap gap-2 mb-3 empty:hidden"></div>
           <div id="input-box" class="flex items-end gap-1.5 bg-ink-800/80 backdrop-blur-2xl border border-white/10 rounded-[26px] pl-3 pr-2.5 py-3 shadow-soft focus-within:border-brand-400 focus-within:shadow-glow transition">
             <div class="flex items-center gap-0.5 pb-0.5 shrink-0">
@@ -363,9 +259,6 @@
             </div>
             <textarea id="input" rows="1" aria-label="消息输入框" placeholder="为 GenericAgent 输入任务..."
               class="flex-1 min-w-0 bg-transparent border-none outline-none resize-none text-frost-50 placeholder:text-frost-400 max-h-[220px] py-1.5 px-1 text-[14px] leading-[1.55]"></textarea>
-                          <button id="stop-btn" aria-label="停止执行" class="hidden w-10 h-10 rounded-2xl bg-red-600 hover:bg-red-500 active:scale-95 text-white flex items-center justify-center transition shadow-lg shrink-0" title="停止 (Esc)">
-                <i data-lucide="square" class="w-3.5 h-3.5"></i>
-              </button>
             <button id="btn-send" aria-label="发送消息" class="w-10 h-10 rounded-2xl bg-gradient-to-br from-brand-400 to-brand-600 hover:brightness-110 active:scale-95 text-white flex items-center justify-center transition shadow-brand disabled:bg-none disabled:bg-ink-600 disabled:text-frost-400 disabled:cursor-not-allowed disabled:shadow-none shrink-0" title="发送 (Enter)">
               <i data-lucide="arrow-up" class="w-4 h-4 send-ic-send"></i>
               <i data-lucide="square" class="w-3.5 h-3.5 send-ic-stop hidden" fill="currentColor"></i>
@@ -373,8 +266,8 @@
           </div>
           <div class="flex items-center justify-between gap-2 pt-2.5 px-2 text-[11px] text-frost-400 select-none">
             <div class="flex items-center gap-1.5">
-              <span id="status-dot-footer" class="w-1.5 h-1.5 rounded-full bg-frost-500 transition"></span>
-              <span id="status-text-footer">就绪</span>
+              <span id="status-dot" class="w-1.5 h-1.5 rounded-full bg-frost-500 transition"></span>
+              <span id="status-text">就绪</span>
               <button id="btn-generate-todo" class="ml-2 px-2 py-0.5 rounded-md bg-white/5 hover:bg-white/10 text-frost-300 hover:text-frost-100 transition text-[11px]" title="分析当前情况，生成一批TODO">🎯 找点事做</button>
             </div>
             <div class="flex items-center gap-3 text-frost-400">
@@ -509,7 +402,6 @@
             </div>
           </div>
           <div id="mcp-servers-list" class="space-y-3"></div>
-          <div id="mcp-recommendations" class="mt-4" style="display:none"></div>
           <button id="btn-add-mcp-server" class="mt-4 px-4 py-2 rounded-lg bg-brand-500/20 text-brand-300 text-[13px] font-medium hover:bg-brand-500/30 transition flex items-center gap-2">
             <i data-lucide="plus" class="w-4 h-4"></i> 添加 MCP 服务器
           </button>
@@ -789,141 +681,64 @@
   </div>
 
   <!-- ═══════════ Context Panel (T2.4 右侧情境面板) ═══════════ -->
-  <!-- Context Panel Resize Handle -->
-  <div id="ctx-resize-handle" class="ctx-resize-handle" title="拖拽调整面板宽度"></div>
-  <div id="context-panel" role="complementary" aria-label="上下文面板" class="hidden shrink-0 flex flex-col h-full border-l border-white/8 bg-[#0f0f0f] transition-all duration-300 overflow-hidden" style="width:0px;">
-    <!-- Panel Header with glow accent -->
-    <div class="ctx-panel-header flex items-center justify-between px-4 py-3 border-b border-white/8 shrink-0 relative">
-      <div class="flex items-center gap-2.5">
-        <div class="w-6 h-6 rounded-lg bg-brand-500/15 flex items-center justify-center">
-          <i data-lucide="brain" class="w-3.5 h-3.5 text-brand-400"></i>
-        </div>
-        <span class="text-[13px] font-semibold text-white/90 tracking-wide">Context</span>
-        <span id="ctx-total-badge" class="text-[9px] px-1.5 py-0.5 rounded-full bg-brand-500/20 text-brand-300 font-medium opacity-0 transition-opacity duration-300">0</span>
+  <div id="context-panel" role="complementary" aria-label="上下文面板" class="hidden shrink-0 flex flex-col h-full border-l border-white/8 bg-[#141414] transition-all duration-300 overflow-hidden" style="width:0px;">
+    <!-- Panel Header -->
+    <div class="flex items-center justify-between px-3 py-2.5 border-b border-white/8 shrink-0">
+      <div class="flex items-center gap-2">
+        <i data-lucide="brain" class="w-4 h-4 text-brand-400"></i>
+        <span class="text-[12px] font-semibold text-white/80 tracking-wide">Context</span>
       </div>
-      <button id="ctx-panel-close" class="w-7 h-7 rounded-lg hover:bg-white/8 flex items-center justify-center text-white/30 hover:text-white/70 transition-all duration-200 active:scale-90">
-        <i data-lucide="panel-right-close" class="w-4 h-4"></i>
-      </button>
-      <div class="absolute bottom-0 left-4 right-4 h-px bg-gradient-to-r from-transparent via-brand-500/30 to-transparent"></div>
-    </div>
-    <!-- Tab Bar -->
-    <div class="ctx-tab-bar flex border-b border-white/6 shrink-0">
-      <button class="ctx-tab active flex-1 py-2.5 text-[11px] font-medium text-center transition-all duration-200 relative" data-tab="memory">
-        <i data-lucide="database" class="w-3 h-3 mx-auto mb-0.5"></i>
-        <span>记忆</span>
-      </button>
-      <button class="ctx-tab flex-1 py-2.5 text-[11px] font-medium text-center transition-all duration-200 relative" data-tab="experience">
-        <i data-lucide="search" class="w-3 h-3 mx-auto mb-0.5"></i>
-        <span>经验</span>
-      </button>
-      <button class="ctx-tab flex-1 py-2.5 text-[11px] font-medium text-center transition-all duration-200 relative" data-tab="preferences">
-        <i data-lucide="heart" class="w-3 h-3 mx-auto mb-0.5"></i>
-        <span>偏好</span>
-      </button>
-      <button class="ctx-tab flex-1 py-2.5 text-[11px] font-medium text-center transition-all duration-200 relative" data-tab="timeline">
-        <i data-lucide="activity" class="w-3 h-3 mx-auto mb-0.5"></i>
-        <span>时间线</span>
+      <button id="ctx-panel-close" class="w-6 h-6 rounded-md hover:bg-white/10 flex items-center justify-center text-white/40 hover:text-white/80 transition">
+        <i data-lucide="panel-right-close" class="w-3.5 h-3.5"></i>
       </button>
     </div>
-    <!-- Tab Content Container -->
-    <div class="ctx-tab-content flex-1 overflow-y-auto min-h-0">
-      <!-- Tab: Memory Overview -->
-      <div class="ctx-tab-pane active" data-pane="memory">
-        <!-- Memory Stats Cards -->
-        <div class="px-4 py-3">
-          <div id="ctx-mem-stats" class="grid grid-cols-2 gap-2">
-            <div class="ctx-stat-card bg-white/[0.03] border border-white/6 rounded-xl px-3 py-2.5 text-center transition-all duration-300 hover:border-brand-500/30 hover:bg-brand-500/5 group cursor-default">
-              <div class="flex items-center justify-center gap-1 mb-1">
-                <span class="w-1.5 h-1.5 rounded-full bg-brand-400 animate-pulse"></span>
-                <span class="text-[9px] text-white/40 uppercase tracking-wider">L1</span>
-              </div>
-              <div id="ctx-l1-count" class="text-[18px] font-bold text-brand-400 group-hover:scale-110 transition-transform">0</div>
-              <div class="text-[9px] text-white/30">索引</div>
-            </div>
-            <div class="ctx-stat-card bg-white/[0.03] border border-white/6 rounded-xl px-3 py-2.5 text-center transition-all duration-300 hover:border-emerald-500/30 hover:bg-emerald-500/5 group cursor-default">
-              <div class="flex items-center justify-center gap-1 mb-1">
-                <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                <span class="text-[9px] text-white/40 uppercase tracking-wider">L2</span>
-              </div>
-              <div id="ctx-l2-count" class="text-[18px] font-bold text-emerald-400 group-hover:scale-110 transition-transform">0</div>
-              <div class="text-[9px] text-white/30">事实</div>
-            </div>
-            <div class="ctx-stat-card bg-white/[0.03] border border-white/6 rounded-xl px-3 py-2.5 text-center transition-all duration-300 hover:border-amber-500/30 hover:bg-amber-500/5 group cursor-default">
-              <div class="flex items-center justify-center gap-1 mb-1">
-                <span class="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span>
-                <span class="text-[9px] text-white/40 uppercase tracking-wider">L3</span>
-              </div>
-              <div id="ctx-l3-count" class="text-[18px] font-bold text-amber-400 group-hover:scale-110 transition-transform">0</div>
-              <div class="text-[9px] text-white/30">SOP</div>
-            </div>
-            <div class="ctx-stat-card bg-white/[0.03] border border-white/6 rounded-xl px-3 py-2.5 text-center transition-all duration-300 hover:border-violet-500/30 hover:bg-violet-500/5 group cursor-default">
-              <div class="flex items-center justify-center gap-1 mb-1">
-                <span class="w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse"></span>
-                <span class="text-[9px] text-white/40 uppercase tracking-wider">L4</span>
-              </div>
-              <div id="ctx-l4-count" class="text-[18px] font-bold text-violet-400 group-hover:scale-110 transition-transform">0</div>
-              <div class="text-[9px] text-white/30">原始</div>
-            </div>
-          </div>
+    <!-- ── Section 1: 记忆概览 ── -->
+    <div class="ctx-section px-3 py-2.5 border-b border-white/6">
+      <div class="flex items-center gap-1.5 mb-2">
+        <span class="text-[11px] font-medium text-white/50 uppercase tracking-wider">Memory</span>
+      </div>
+      <div id="ctx-mem-stats" class="grid grid-cols-3 gap-1.5">
+        <div class="ctx-stat-card bg-white/4 rounded-lg px-2 py-1.5 text-center">
+          <div id="ctx-l1-count" class="text-[14px] font-bold text-brand-400">0</div>
+          <div class="text-[9px] text-white/40">L1 索引</div>
         </div>
-        <!-- Activated Memories -->
-        <div class="px-4 pb-3">
-          <div class="flex items-center justify-between mb-2">
-            <span class="text-[10px] font-medium text-white/40 uppercase tracking-wider">本会话激活的记忆</span>
-            <span id="ctx-active-count" class="text-[9px] text-white/25">0 条</span>
-          </div>
-          <div id="ctx-active-memories" class="space-y-1.5 max-h-[200px] overflow-y-auto ctx-scroll-area">
-            <div class="text-[10px] text-white/20 text-center py-4">
-              <i data-lucide="zap" class="w-5 h-5 mx-auto mb-1.5 opacity-30"></i>
-              等待记忆激活...
-            </div>
-          </div>
+        <div class="ctx-stat-card bg-white/4 rounded-lg px-2 py-1.5 text-center">
+          <div id="ctx-l2-count" class="text-[14px] font-bold text-emerald-400">0</div>
+          <div class="text-[9px] text-white/40">L2 事实</div>
+        </div>
+        <div class="ctx-stat-card bg-white/4 rounded-lg px-2 py-1.5 text-center">
+          <div id="ctx-l3-count" class="text-[14px] font-bold text-amber-400">0</div>
+          <div class="text-[9px] text-white/40">L3 SOP</div>
         </div>
       </div>
-      <!-- Tab: Experience Search -->
-      <div class="ctx-tab-pane" data-pane="experience" style="display:none">
-        <div class="px-4 py-3">
-          <div class="relative mb-3">
-            <i data-lucide="search" class="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-white/25"></i>
-            <input id="ctx-exp-search" type="text" placeholder="搜索历史经验..."
-              class="w-full pl-8 pr-3 py-2 bg-white/[0.04] border border-white/8 rounded-xl text-[11px] text-white placeholder:text-white/20 outline-none focus:border-brand-400/40 focus:bg-white/[0.06] transition-all duration-200" />
-          </div>
-          <div id="ctx-exp-results" class="space-y-2">
-            <div class="text-[10px] text-white/20 text-center py-6">
-              <i data-lucide="compass" class="w-6 h-6 mx-auto mb-2 opacity-25"></i>
-              输入关键词搜索历史经验
-            </div>
-          </div>
-        </div>
+      <!-- 激活的记忆卡片 -->
+      <div id="ctx-active-memories" class="mt-2 space-y-1.5 max-h-[160px] overflow-y-auto"></div>
+    </div>
+    <!-- ── Section 2: 经验搜索 ── -->
+    <div class="ctx-section px-3 py-2.5 border-b border-white/6 flex-1 flex flex-col min-h-0">
+      <div class="flex items-center gap-1.5 mb-2">
+        <i data-lucide="search" class="w-3 h-3 text-white/40"></i>
+        <span class="text-[11px] font-medium text-white/50 uppercase tracking-wider">Experience</span>
       </div>
-      <!-- Tab: Preferences -->
-      <div class="ctx-tab-pane" data-pane="preferences" style="display:none">
-        <div class="px-4 py-3">
-          <div class="flex items-center justify-between mb-3">
-            <span class="text-[10px] font-medium text-white/40 uppercase tracking-wider">学习到的偏好</span>
-          </div>
-          <div id="ctx-pref-tags" class="flex flex-wrap gap-1.5">
-            <div class="text-[10px] text-white/20 text-center py-6 w-full">
-              <i data-lucide="heart" class="w-6 h-6 mx-auto mb-2 opacity-25"></i>
-              用户偏好将在此显示
-            </div>
-          </div>
-        </div>
+      <div class="relative mb-2">
+        <input id="ctx-exp-search" type="text" placeholder="搜索经验..."
+          class="w-full pl-3 pr-7 py-1.5 bg-white/5 border border-white/8 rounded-md text-[11px] text-white placeholder:text-white/25 outline-none focus:border-brand-400/50 transition" />
+        <button id="ctx-exp-search-btn" class="absolute right-1.5 top-1/2 -translate-y-1/2 text-white/30 hover:text-white/70 transition">
+          <i data-lucide="arrow-right" class="w-3 h-3"></i>
+        </button>
       </div>
-      <!-- Tab: Execution Timeline -->
-      <div class="ctx-tab-pane" data-pane="timeline" style="display:none">
-        <div class="px-4 py-3">
-          <div class="flex items-center justify-between mb-3">
-            <span class="text-[10px] font-medium text-white/40 uppercase tracking-wider">执行时间线</span>
-            <span id="ctx-timeline-count" class="text-[9px] text-white/25">0 步</span>
-          </div>
-          <div id="ctx-timeline" class="space-y-0">
-            <div class="text-[10px] text-white/20 text-center py-6">
-              <i data-lucide="activity" class="w-6 h-6 mx-auto mb-2 opacity-25"></i>
-              执行步骤将实时显示
-            </div>
-          </div>
-        </div>
+      <div id="ctx-exp-results" class="flex-1 overflow-y-auto space-y-1.5 min-h-0">
+        <div class="text-[10px] text-white/25 text-center py-3">输入关键词搜索历史经验</div>
+      </div>
+    </div>
+    <!-- ── Section 3: 偏好标签 ── -->
+    <div class="ctx-section px-3 py-2.5 shrink-0">
+      <div class="flex items-center gap-1.5 mb-2">
+        <i data-lucide="heart" class="w-3 h-3 text-white/40"></i>
+        <span class="text-[11px] font-medium text-white/50 uppercase tracking-wider">Preferences</span>
+      </div>
+      <div id="ctx-pref-tags" class="flex flex-wrap gap-1">
+        <div class="text-[10px] text-white/25 py-1">暂无学习到的偏好</div>
       </div>
     </div>
   </div>
@@ -937,7 +752,7 @@
           <i data-lucide="x" class="w-4 h-4"></i>
         </button>
       </div>
-      <div class="flex-1 overflow-y-auto px-5 py-5 space-y-4">
+      <form id="session-editor-form" class="flex-1 overflow-y-auto px-5 py-5 space-y-4" onsubmit="return false">
         <!-- Type -->
         <div>
           <label class="cfg-label">类型</label>
@@ -1056,7 +871,7 @@
             </div>
           </div>
         </div>
-      </div>
+      </form>
       <div class="flex gap-3 px-5 py-4 border-t border-ink-700 shrink-0">
         <button id="session-editor-save" class="flex-1 py-2 rounded-xl bg-brand-500 hover:bg-brand-400 text-white font-medium transition">保存</button>
         <button id="session-editor-cancel" class="px-5 py-2 rounded-xl bg-white/8 hover:bg-white/14 text-frost-100 font-medium transition">取消</button>
@@ -1064,84 +879,7 @@
     </div>
   </div>
 
-  <script>window.__jsErrors=[];window.addEventListener('error',function(e){window.__jsErrors.push({msg:e.message,file:e.filename,ln:e.lineno,col:e.colno,stack:e.error?e.error.stack:null});console.error('[JS-ERR]',e.message,e.filename+':'+e.lineno);});</script>
-  <script src="/static/api.js?v=4"></script>
-  <script src="/static/app.js?v=7"></script>
-  <!-- Toast notification container -->
-  <div id="toast-container" class="fixed top-4 right-4 z-[9999] flex flex-col gap-2 pointer-events-none transition-all duration-200" style="max-width: calc(100vw - 32px)"></div>
-
-  <!-- Keyboard shortcut help overlay -->
-  <div id="shortcut-help-overlay" class="hidden fixed inset-0 z-[9998] bg-black/60 backdrop-blur-sm flex items-center justify-center" role="dialog" aria-label="快捷键帮助">
-    <div class="bg-ink-800 border border-white/10 rounded-2xl shadow-pop max-w-lg w-full mx-4 max-h-[80vh] overflow-y-auto">
-      <div class="flex items-center justify-between px-6 py-4 border-b border-white/10">
-        <h3 class="text-lg font-semibold text-white">⌨️ 快捷键</h3>
-        <button id="shortcut-close-btn" class="w-8 h-8 rounded-lg text-frost-400 hover:text-white hover:bg-ink-600 flex items-center justify-center transition" aria-label="关闭">
-          <i data-lucide="x" class="w-4 h-4"></i>
-        </button>
-      </div>
-      <div class="px-6 py-4 space-y-3 text-sm" id="shortcut-list">
-        <div class="flex justify-between items-center py-1.5 border-b border-white/5"><span class="text-frost-200">新建对话</span><span><kbd class="kbd">Ctrl</kbd>+<kbd class="kbd">N</kbd></span></div>
-        <div class="flex justify-between items-center py-1.5 border-b border-white/5"><span class="text-frost-200">快速搜索</span><span><kbd class="kbd">Ctrl</kbd>+<kbd class="kbd">K</kbd></span></div>
-        <div class="flex justify-between items-center py-1.5 border-b border-white/5"><span class="text-frost-200">切换Context Panel</span><span><kbd class="kbd">Ctrl</kbd>+<kbd class="kbd">Shift</kbd>+<kbd class="kbd">C</kbd></span></div>
-        <div class="flex justify-between items-center py-1.5 border-b border-white/5"><span class="text-frost-200">切换信任等级</span><span><kbd class="kbd">Ctrl</kbd>+<kbd class="kbd">L</kbd></span></div>
-        <div class="flex justify-between items-center py-1.5 border-b border-white/5"><span class="text-frost-200">切换主题</span><span><kbd class="kbd">Ctrl</kbd>+<kbd class="kbd">Shift</kbd>+<kbd class="kbd">T</kbd></span></div>
-        <div class="flex justify-between items-center py-1.5 border-b border-white/5"><span class="text-frost-200">快捷键帮助</span><span><kbd class="kbd">Ctrl</kbd>+<kbd class="kbd">/</kbd></span></div>
-        <div class="flex justify-between items-center py-1.5 border-b border-white/5"><span class="text-frost-200">中断执行</span><span><kbd class="kbd">Esc</kbd></span></div>
-        <div class="flex justify-between items-center py-1.5 border-b border-white/5"><span class="text-frost-200">强制发送</span><span><kbd class="kbd">Ctrl</kbd>+<kbd class="kbd">Enter</kbd></span></div>
-        <div class="flex justify-between items-center py-1.5 border-b border-white/5"><span class="text-frost-200">执行预览</span><span><kbd class="kbd">Ctrl</kbd>+<kbd class="kbd">P</kbd></span></div>
-        <div class="flex justify-between items-center py-1.5 border-b border-white/5"><span class="text-frost-200">发送消息</span><span><kbd class="kbd">Enter</kbd></span></div>
-        <div class="flex justify-between items-center py-1.5"><span class="text-frost-200">关闭弹窗</span><span><kbd class="kbd">Esc</kbd></span></div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Execution Monitor Timeline -->
-  <div id="execution-monitor" class="hidden fixed bottom-20 left-1/2 -translate-x-1/2 z-[999] w-[480px] max-w-[90vw]">
-    <div class="exec-monitor-bar bg-ink-800/95 backdrop-blur-xl border border-white/10 rounded-xl shadow-pop overflow-hidden">
-      <div class="flex items-center justify-between px-4 py-2 border-b border-white/5">
-        <span class="text-xs font-medium text-frost-200">⚡ 执行监控</span>
-        <button id="exec-monitor-close" class="w-5 h-5 rounded text-frost-400 hover:text-white flex items-center justify-center text-xs">&times;</button>
-      </div>
-      <div id="exec-timeline" class="px-4 py-3 space-y-2 max-h-[200px] overflow-y-auto text-xs">
-        <!-- Timeline items inserted by JS -->
-      </div>
-    </div>
-  </div>
-  <!-- Execution timeline section for right panel -->
-  <div id="exec-timeline-section" class="hidden">
-    <div class="p-4 space-y-2" id="exec-timeline-panel">
-      <div class="text-xs text-frost-400 text-center py-4">暂无执行记录</div>
-    </div>
-  </div>
-
-  <!-- Execution Preview Panel -->
-  <div id="preview-panel" class="hidden fixed inset-0 z-[9990] bg-black/50 backdrop-blur-sm flex items-center justify-center">
-    <div class="bg-ink-800 border border-white/10 rounded-2xl shadow-pop max-w-2xl w-full mx-4 max-h-[70vh] overflow-hidden">
-      <div class="flex items-center justify-between px-5 py-3 border-b border-white/10">
-        <h3 class="text-sm font-semibold text-white">🔍 执行预览</h3>
-        <div class="flex gap-2">
-          <button id="preview-approve" class="px-3 py-1 text-xs rounded-lg bg-brand-400 text-white hover:bg-brand-500 transition">✓ 批准</button>
-          <button id="preview-reject" class="px-3 py-1 text-xs rounded-lg bg-white/10 text-frost-200 hover:bg-white/20 transition">✗ 拒绝</button>
-        </div>
-      </div>
-      <div id="preview-content" class="p-5 text-sm text-frost-200 overflow-y-auto max-h-[50vh] font-mono whitespace-pre-wrap"></div>
-    </div>
-  </div>
-
-  <!-- Review/Retrospective Modal -->
-  <div id="review-modal" class="hidden fixed inset-0 z-[9990] bg-black/50 backdrop-blur-sm flex items-center justify-center">
-    <div class="review-backdrop bg-ink-800 border border-white/10 rounded-2xl shadow-pop max-w-xl w-full mx-4 max-h-[75vh] overflow-hidden">
-      <div class="flex items-center justify-between px-5 py-3 border-b border-white/10">
-        <h3 class="text-sm font-semibold text-white">📊 复盘时间线</h3>
-        <button id="review-close-btn" class="w-7 h-7 rounded-lg text-frost-400 hover:text-white hover:bg-ink-600 flex items-center justify-center transition">
-          <i data-lucide="x" class="w-4 h-4"></i>
-        </button>
-      </div>
-      <div id="review-content" class="p-5 overflow-y-auto max-h-[60vh] text-sm">
-        <div class="text-center text-frost-400 py-8">暂无复盘数据</div>
-      </div>
-    </div>
-  </div>
-
+  <script src="/static/api.js?v=2"></script>
+  <script src="/static/app.js?v=10"></script>
 </body>
 </html>
