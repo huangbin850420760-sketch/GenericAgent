@@ -217,11 +217,20 @@
       el.addEventListener('click', () => {
         API.send('next_llm', parseInt(el.dataset.idx, 10));
         llmDropdown.classList.remove('open');
+        llmDropdown.classList.add('hidden');
       });
     });
   }
-  llmSelector.addEventListener('click', (e) => { e.stopPropagation(); llmDropdown.classList.toggle('open'); });
-  document.addEventListener('click', () => llmDropdown.classList.remove('open'));
+  llmSelector.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const willOpen = !llmDropdown.classList.contains('open');
+    llmDropdown.classList.toggle('open', willOpen);
+    llmDropdown.classList.toggle('hidden', !willOpen);
+  });
+  document.addEventListener('click', () => {
+    llmDropdown.classList.remove('open');
+    llmDropdown.classList.add('hidden');
+  });
 
   /* ═════ Tabs ═════ */
   // Top tab bar buttons (.tab-btn) + bottom action buttons ([data-tab])
@@ -1474,6 +1483,8 @@
     const root = document.documentElement;
     root.setAttribute('data-theme', theme);
     const isLight = theme === 'light';
+    // Sync .theme-light class on body so both selector patterns work
+    document.body.classList.toggle('theme-light', isLight);
     document.querySelectorAll('.theme-icon-dark')
       .forEach(el => el.classList.toggle('hidden', isLight));
     document.querySelectorAll('.theme-icon-light')
@@ -1496,7 +1507,7 @@
   const themeToggleRail = $('theme-toggle-rail');
   if (themeToggleRail) {
     themeToggleRail.addEventListener('click', () => {
-      const current = document.documentElement.classList.contains('theme-light') ? 'light' : 'dark';
+      const current = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
       const next = current === 'dark' ? 'light' : 'dark';
       _storage.set('ga-theme', next);
       applyTheme(next);

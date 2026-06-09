@@ -1234,6 +1234,43 @@ def _index():
     return static_file('index.html', root=WEB_DIR)
 
 
+# ───────── Hot-reload version tracker ─────────
+_HOT_FILES = ['index.html', 'app.js', 'app.css']
+_hot_cache = {'v': 0, 'mtimes': {}}
+
+def _calc_hot_version():
+    """Recalc version from file mtimes; returns dict with version + per-file mtimes."""
+    mtimes = {}
+    for f in _HOT_FILES:
+        fp = os.path.join(WEB_DIR, f)
+        try:
+            mtimes[f] = os.path.getmtime(fp)
+        except OSError:
+            mtimes[f] = 0
+    changed = mtimes != _hot_cache['mtimes']
+    if changed:
+        _hot_cache['mtimes'] = mtimes
+        _hot_cache['v'] += 1
+    return {'v': _hot_cache['v'], 'files': {f: int(t) for f, t in mtimes.items()}, 'changed': changed}
+
+@app.route('/api/hot-version')
+def _hot_version():
+    return _calc_hot_version()
+
+@app.route('/api/hot-reload-css')
+def _hot_reload_css():
+    """Return latest CSS content with no-cache headers for hot-swap."""
+    response.content_type = 'text/css; charset=UTF-8'
+    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
+    css_path = os.path.join(WEB_DIR, 'app.css')
+    if os.path.isfile(css_path):
+        with open(css_path, encoding='utf-8') as f:
+            return f.read()
+    response.status = 404
+    return '/* not found */'
+
 @app.route('/static/<filename:path>')
 def _static(filename):
     return static_file(filename, root=WEB_DIR)

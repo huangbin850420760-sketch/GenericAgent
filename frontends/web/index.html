@@ -162,9 +162,9 @@
     </div>
 
     <!-- ═══════════ MAIN (rounded container) ═══════════ -->
-    <div class="flex-1 min-w-0 flex flex-col overflow-hidden bg-[#1a1a1a] rounded-tl-xl">
+    <div class="flex-1 min-w-0 flex flex-col overflow-hidden bg-[#1a1a1a] rounded-tl-xl" style="overflow:visible;">
       <!-- Topbar (minimal: conversation title + model selector) -->
-      <header class="h-11 px-5 flex items-center border-b border-[#262626] shrink-0 rounded-tl-xl overflow-hidden">
+      <header class="h-11 px-5 flex items-center border-b border-[#262626] shrink-0 rounded-tl-xl overflow-visible relative z-50">
         <div class="flex items-center gap-3 min-w-0 flex-1">
           <span id="conversation-title" class="text-white/80 font-medium truncate text-[14px]">新对话</span>
         </div>
@@ -880,6 +880,89 @@
   </div>
 
   <script src="/static/api.js?v=2"></script>
-  <script src="/static/app.js?v=10"></script>
+  <script src="/static/app.js?v=1780971792"></script>
+
+  <!-- ═════ Hot-Reload: auto-detect file changes, CSS无感替换, JS提示重载 ═════ -->
+  <script>
+  (() => {
+    const HR_INTERVAL = 3000;  // 轮询间隔 3s
+    const HR_KEY = 'ga_hot_v';
+    let _hr_lastV = null;
+    let _hr_toast = null;
+
+    function _hr_showToast(msg, type) {
+      if (_hr_toast) _hr_toast.remove();
+      const el = document.createElement('div');
+      el.id = 'hr-toast';
+      el.style.cssText = 'position:fixed;top:12px;right:12px;z-index:99999;padding:10px 18px;border-radius:12px;font-size:13px;font-family:inherit;cursor:pointer;transition:all .3s;box-shadow:0 4px 20px rgba(0,0,0,0.4);max-width:360px;';
+      if (type === 'css') {
+        el.style.background = 'rgba(16,163,127,0.92)';
+        el.style.color = '#fff';
+        el.textContent = '🔄 CSS 已热更新';
+        document.body.appendChild(el);
+        _hr_toast = el;
+        setTimeout(() => { if (el.parentNode) el.remove(); _hr_toast = null; }, 2500);
+      } else {
+        el.style.background = 'rgba(74,158,255,0.92)';
+        el.style.color = '#fff';
+        el.innerHTML = '🔄 JS/HTML 已更新 — <u>点击重载</u>';
+        el.onclick = () => location.reload();
+        document.body.appendChild(el);
+        _hr_toast = el;
+      }
+    }
+
+    async function _hr_poll() {
+      try {
+        const r = await fetch('/api/hot-version', {cache:'no-store'});
+        if (!r.ok) return;
+        const d = await r.json();
+        if (_hr_lastV === null) { _hr_lastV = d.v; return; }
+        if (d.v !== _hr_lastV) {
+          // 检查哪些文件变了
+          const prev = sessionStorage.getItem(HR_KEY);
+          const files = d.files || {};
+          sessionStorage.setItem(HR_KEY, JSON.stringify(files));
+          _hr_lastV = d.v;
+
+          // 判断变化类型
+          let cssChanged = false, jsChanged = false;
+          // 简化：v变了就说明有文件变化，通过重新获取CSS无感替换
+          // CSS: 无感替换
+          const cssLink = document.querySelector('link[href*="app.css"]');
+          if (cssLink) {
+            const newHref = '/static/app.css?v=' + d.v;
+            // 预加载新CSS
+            const newLink = document.createElement('link');
+            newLink.rel = 'stylesheet';
+            newLink.href = newHref;
+            newLink.onload = () => {
+              // 移除旧 link
+              if (cssLink.parentNode && cssLink !== newLink) cssLink.remove();
+              _hr_showToast('CSS 已热更新', 'css');
+            };
+            cssLink.parentNode.insertBefore(newLink, cssLink.nextSibling);
+            cssChanged = true;
+          }
+
+          // JS/HTML: 需要reload，显示通知
+          const jsScript = document.querySelector('script[src*="app.js"]');
+          if (jsScript) {
+            _hr_showToast('JS/HTML 已更新', 'js');
+            jsChanged = true;
+          }
+
+          if (!cssChanged && !jsChanged) {
+            _hr_showToast('文件已更新', 'js');
+          }
+        }
+      } catch(e) { /* silent */ }
+    }
+
+    // 启动轮询
+    setInterval(_hr_poll, HR_INTERVAL);
+    console.log('[HotReload] 🔥 polling every', HR_INTERVAL, 'ms');
+  })();
+  </script>
 </body>
 </html>
