@@ -35,7 +35,8 @@ from slash_cmds import (build_update_prompt, build_autorun_prompt,
                         build_morphling_prompt, build_goal_prompt,
                         build_hive_prompt)
 
-WEB_DIR = os.path.join(HERE, 'web')  # default; overridden by --frontend codex
+WEB_DIR = os.path.join(HERE, 'web')  # default; overridden by --frontend
+
 
 # ───────── Slash-command registry ─────────
 _SLASH_CMDS = {
@@ -1163,7 +1164,35 @@ def _goal_stop():
         json.dump(d, f, ensure_ascii=False, indent=2)
     return {'ok': True}
 
-# ── Hive ──
+# ── Hive Process Manager ──
+_hive_processes = {}  # {hive_name: {'bbs': Popen, 'master': Popen, 'workers': [Popen,...], 'cwd': str}}
+_hive_lock = threading.Lock()
+
+def _find_free_port(start=18600, end=18999):
+    """Find a free TCP port in the given range."""
+    for p in range(start, end):
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(0.1)
+            s.bind(('127.0.0.1', p))
+            s.close()
+            return p
+        except Exception:
+            continue
+    return start
+
+def _read_hive_log(hive_dir, role, max_lines=50):
+    """Read the last N lines of a hive process log file."""
+    log_path = os.path.join(hive_dir, f'{role}.log')
+    if not os.path.isfile(log_path):
+        return ''
+    try:
+        with open(log_path, 'r', encoding='utf-8', errors='replace') as f:
+            lines = f.readlines()
+        return ''.join(lines[-max_lines:])
+    except Exception:
+        return ''
+
 @app.route('/api/hive/sessions')
 def _hive_sessions():
     sessions = []
@@ -1174,7 +1203,6 @@ def _hive_sessions():
         if d.startswith('hive_'):
             full = os.path.join(temp_dir, d)
             if os.path.isdir(full):
-                # check for goal_state.json inside
                 gs = os.path.join(full, 'goal_state.json')
                 state = None
                 if os.path.isfile(gs):
@@ -1182,7 +1210,45 @@ def _hive_sessions():
                         state = json.loads(open(gs, encoding='utf-8').read())
                     except Exception:
                         pass
-                sessions.append({'name': d, 'state': state})
+                # Check live process status
+                procs = _hive_processes.get(d)
+                pstatus = None
+                if procs:
+                    bbs_alive = procs.get('bbs') and procs['bbs'].poll() is None
+                    master_alive = procs.get('master') and procs['master'].poll() is None
+                    workers_alive = [w.poll() is None for w in procs.get('workers', [])]
+                    pstatus = {
+                        'bbs': 'running' if bbs_alive else 'stopped',
+                        'master': 'running' if master_alive else 'stopped',
+                        'workers': [{'id': i, 'status': 'running' if a else 'stopped'} for i, a in enumerate(workers_alive)],
+                        'workers_total': len(workers_alive),
+                        'workers_running': sum(workers_alive),
+                    }
+                # Derive status & worker info for frontend
+                if pstatus:
+                    status = 'running' if pstatus.get('workers_running', 0) > 0 else 'stopped'
+                elif state:
+                    status = state.get('status', 'unknown')
+                else:
+                    status = 'unknown'
+                worker_list = []
+                if pstatus:
+                    worker_list = pstatus.get('workers', [])
+                elif state and isinstance(state.get('workers'), list):
+                    worker_list = state['workers']
+                elif state:
+                    # Fallback: generate worker list from workers_count
+                    wc = state.get('workers_count', 0)
+                    if wc > 0:
+                        worker_list = [{'id': i, 'status': 'stopped', 'role': f'worker-{i+1}'} for i in range(wc)]
+                sessions.append({
+                    'name': d,
+                    'status': status,
+                    'state': state,
+                    'process': pstatus,
+                    'worker_count': len(worker_list),
+                    'workers': worker_list,
+                })
     return {'sessions': sessions}
 
 @app.route('/api/hive/create', method='POST')
@@ -1191,11 +1257,21 @@ def _hive_create():
     objective = d.get('objective', '').strip()
     if not objective:
         response.status = 400; return {'error': 'objective required'}
-    short = re.sub(r'[^\w]', '_', objective[:20]).strip('_')
-    hive_dir = os.path.join(_HIVE_BASE, f'hive_{short}')
+    short = re.sub(r'[^\w]', '_', objective[:20]).strip('_') or 'hive'
+    # Ensure unique name
+    base_name = f'hive_{short}'
+    hive_name = base_name
+    counter = 1
+    while os.path.isdir(os.path.join(_HIVE_BASE, hive_name)):
+        hive_name = f'{base_name}_{counter}'
+        counter += 1
+    hive_dir = os.path.join(_HIVE_BASE, hive_name)
     os.makedirs(hive_dir, exist_ok=True)
-    workers = int(d.get('workers', 3))
+    workers = max(1, min(int(d.get('workers', 3)), 9))
     budget = int(d.get('budget_seconds', 14400))
+    port = _find_free_port()
+    key = short + '_' + str(int(time.time()))[-4:]
+    # Write goal_state.json
     import time as _t
     state = {
         'objective': objective,
@@ -1204,19 +1280,95 @@ def _hive_create():
         'turns_used': 0,
         'max_turns': 300,
         'status': 'running',
-        'done_prompt': d.get('done_prompt', '')
+        'done_prompt': d.get('done_prompt', ''),
+        'hive_name': hive_name,
+        'bbs_port': port,
+        'bbs_key': key,
+        'workers_count': workers,
     }
     gs_path = os.path.join(hive_dir, 'goal_state.json')
     with open(gs_path, 'w', encoding='utf-8') as f:
         json.dump(state, f, ensure_ascii=False, indent=2)
-    port = d.get('port', 18600)
-    key = d.get('key', short)
-    cmds = {
-        'bbs': f'start /b python assets/agent_bbs.py --cwd temp/hive_{short} --port {port} --key {key}',
-        'master': f'set GOAL_STATE=temp/hive_{short}/goal_state.json && start /b python agentmain.py --reflect reflect/goal_mode.py',
-        'worker': f'start /b python agentmain.py --reflect reflect/agent_team_worker.py --base_url http://127.0.0.1:{port} --board_key {key} --name hive-worker-N'
+    # Write boards.json for BBS
+    boards = {key: {"name": hive_name, "db": os.path.join(hive_dir, "bbs.db")}}
+    boards_path = os.path.join(hive_dir, 'boards.json')
+    with open(boards_path, 'w', encoding='utf-8') as f:
+        json.dump(boards, f, ensure_ascii=False, indent=2)
+
+    # ── Start processes ──
+    proc_info = {'workers': [], 'cwd': hive_dir, 'port': port, 'key': key}
+    si = subprocess.STARTUPINFO()
+    si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    si.wShowWindow = 0  # SW_HIDE
+
+    # 1) BBS server
+    bbs_cwd = hive_dir
+    bbs_log = open(os.path.join(hive_dir, 'bbs.log'), 'w', encoding='utf-8')
+    bbs_proc = subprocess.Popen(
+        [sys.executable, os.path.join(ROOT, 'assets', 'agent_bbs.py')],
+        cwd=bbs_cwd,
+        stdout=bbs_log, stderr=subprocess.STDOUT,
+        env={**os.environ, 'BBS_PORT': str(port), 'BBS_BOARDS': boards_path},
+        startupinfo=si,
+        creationflags=subprocess.CREATE_NO_WINDOW,
+    )
+    proc_info['bbs'] = bbs_proc
+    proc_info['bbs_log'] = bbs_log
+    time.sleep(0.5)  # let BBS initialize
+
+    # 2) Master (hive_master.py = goal_mode + BBS task dispatch)
+    master_env = {**os.environ,
+                  'GOAL_STATE': os.path.join('temp', hive_name, 'goal_state.json'),
+                  'BBS_URL': f'http://127.0.0.1:{port}',
+                  'BBS_KEY': key}
+    master_log = open(os.path.join(hive_dir, 'master.log'), 'w', encoding='utf-8')
+    master_proc = subprocess.Popen(
+        [sys.executable, os.path.join(ROOT, 'agentmain.py'), '--reflect', 'reflect/hive_master.py'],
+        cwd=ROOT,
+        stdout=master_log, stderr=subprocess.STDOUT,
+        env=master_env,
+        startupinfo=si,
+        creationflags=subprocess.CREATE_NO_WINDOW,
+    )
+    proc_info['master'] = master_proc
+    proc_info['master_log'] = master_log
+
+    # 3) Workers
+    worker_log_files = []
+    for i in range(workers):
+        wname = f'hive-worker-{i+1}'
+        w_log = open(os.path.join(hive_dir, f'worker_{i+1}.log'), 'w', encoding='utf-8')
+        worker_log_files.append(w_log)
+        w_proc = subprocess.Popen(
+            [sys.executable, os.path.join(ROOT, 'agentmain.py'), '--reflect',
+             'reflect/agent_team_worker.py',
+             '--base_url', f'http://127.0.0.1:{port}',
+             '--board_key', key,
+             '--name', wname],
+            cwd=ROOT,
+            stdout=w_log, stderr=subprocess.STDOUT,
+            startupinfo=si,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+        proc_info['workers'].append(w_proc)
+    proc_info['worker_logs'] = worker_log_files
+
+    with _hive_lock:
+        _hive_processes[hive_name] = proc_info
+
+    return {
+        'ok': True,
+        'name': hive_name,
+        'dir': f'temp/{hive_name}',
+        'workers': workers,
+        'port': port,
+        'key': key,
+        'pids': {
+            'bbs': bbs_proc.pid,
+            'master': master_proc.pid,
+            'workers': [w.pid for w in proc_info['workers']],
+        }
     }
-    return {'ok': True, 'dir': f'temp/hive_{short}', 'workers': workers, 'commands': cmds}
 
 @app.route('/api/hive/<name>/status')
 def _hive_status(name):
@@ -1224,9 +1376,186 @@ def _hive_status(name):
     if not os.path.isfile(gs):
         response.status = 404; return {'error': 'not found'}
     try:
-        return {'state': json.loads(open(gs, encoding='utf-8').read())}
+        state = json.loads(open(gs, encoding='utf-8').read())
     except Exception:
-        return {'state': None}
+        state = None
+    # Process status
+    procs = _hive_processes.get(name)
+    proc_status = None
+    if procs:
+        bbs_alive = procs.get('bbs') and procs['bbs'].poll() is None
+        master_alive = procs.get('master') and procs['master'].poll() is None
+        workers_alive = [w.poll() is None for w in procs.get('workers', [])]
+        proc_status = {
+            'bbs': 'running' if bbs_alive else 'stopped',
+            'master': 'running' if master_alive else 'stopped',
+            'workers': [{'id': i, 'status': 'running' if a else 'stopped'} for i, a in enumerate(workers_alive)],
+        }
+    # Read recent logs (last 30 lines each)
+    hive_dir = os.path.join(_HIVE_BASE, name)
+    logs = {
+        'bbs': _read_hive_log(hive_dir, 'bbs'),
+        'master': _read_hive_log(hive_dir, 'master'),
+    }
+    for i in range(len(procs.get('workers', [])) if procs else 0):
+        logs[f'worker_{i+1}'] = _read_hive_log(hive_dir, f'worker_{i+1}')
+    return {'state': state, 'process': proc_status, 'logs': logs}
+
+@app.route('/api/hive/<name>/stop', method='POST')
+def _hive_stop(name):
+    with _hive_lock:
+        procs = _hive_processes.get(name)
+        if not procs:
+            # Try to stop by updating goal_state
+            gs = os.path.join(_HIVE_BASE, name, 'goal_state.json')
+            if os.path.isfile(gs):
+                try:
+                    d = json.loads(open(gs, encoding='utf-8').read())
+                    d['status'] = 'stopped'
+                    with open(gs, 'w', encoding='utf-8') as f:
+                        json.dump(d, f, ensure_ascii=False, indent=2)
+                except Exception:
+                    pass
+            return {'ok': True, 'warning': 'no live processes found'}
+        # Terminate all processes
+        killed = []
+        for role in ['bbs', 'master']:
+            p = procs.get(role)
+            if p and p.poll() is None:
+                try:
+                    p.terminate()
+                    p.wait(timeout=5)
+                except Exception:
+                    try: p.kill()
+                    except Exception: pass
+                killed.append(f'{role}:{p.pid}')
+        for i, w in enumerate(procs.get('workers', [])):
+            if w.poll() is None:
+                try:
+                    w.terminate()
+                    w.wait(timeout=5)
+                except Exception:
+                    try: w.kill()
+                    except Exception: pass
+                killed.append(f'worker_{i+1}:{w.pid}')
+        # Close log file handles
+        for lf in [procs.get('bbs_log'), procs.get('master_log')] + procs.get('worker_logs', []):
+            try:
+                if lf and not lf.closed: lf.close()
+            except Exception:
+                pass
+        # Update goal_state
+        gs = os.path.join(_HIVE_BASE, name, 'goal_state.json')
+        if os.path.isfile(gs):
+            try:
+                d = json.loads(open(gs, encoding='utf-8').read())
+                d['status'] = 'stopped'
+                with open(gs, 'w', encoding='utf-8') as f:
+                    json.dump(d, f, ensure_ascii=False, indent=2)
+            except Exception:
+                pass
+        del _hive_processes[name]
+    return {'ok': True, 'killed': killed}
+
+@app.route('/api/hive/<name>/log/<role>')
+def _hive_log(name, role):
+    """Get log for a specific role (bbs, master, worker_1, worker_2, ...)."""
+    hive_dir = os.path.join(_HIVE_BASE, name)
+    if not os.path.isdir(hive_dir):
+        response.status = 404; return {'error': 'not found'}
+    lines = int(request.params.get('lines', 100))
+    log_content = _read_hive_log(hive_dir, role, max_lines=lines)
+    return {'log': log_content, 'role': role}
+
+@app.route('/api/hive/<name>', method='DELETE')
+def _hive_delete(name):
+    """Stop processes (if running) and remove hive directory."""
+    import shutil
+    # Stop processes first
+    with _hive_lock:
+        procs = _hive_processes.pop(name, None)
+    if procs:
+        for role in ['bbs', 'master']:
+            p = procs.get(role)
+            if p and p.poll() is None:
+                try: p.terminate(); p.wait(timeout=5)
+                except Exception:
+                    try: p.kill()
+                    except Exception: pass
+        for w in procs.get('workers', []):
+            if w.poll() is None:
+                try: w.terminate(); w.wait(timeout=5)
+                except Exception:
+                    try: w.kill()
+                    except Exception: pass
+        for lf in [procs.get('bbs_log'), procs.get('master_log')] + procs.get('worker_logs', []):
+            try:
+                if lf and not lf.closed: lf.close()
+            except Exception: pass
+    # Remove directory — kill orphan processes holding files if needed
+    hive_dir = os.path.join(_HIVE_BASE, name)
+    if os.path.isdir(hive_dir):
+        for attempt in range(3):
+            try:
+                shutil.rmtree(hive_dir)
+                return {'ok': True}
+            except PermissionError:
+                # Orphan processes may still hold log files; find and kill them
+                _kill_orphan_hive_procs(name, hive_dir)
+                import time; time.sleep(0.5)
+            except Exception as e:
+                response.status = 500; return {'error': str(e)}
+        try:
+            shutil.rmtree(hive_dir)
+            return {'ok': True}
+        except Exception as e:
+            response.status = 500; return {'error': str(e)}
+    return {'ok': True, 'warning': 'directory not found'}
+
+def _kill_orphan_hive_procs(name, hive_dir):
+    """Find and terminate hive-related orphan processes (bbs, master, worker)."""
+    import subprocess, signal as sig
+    # Search for agent_bbs.py, agent_master.py, agent_worker.py processes
+    # that were spawned for this hive. Use PowerShell (more reliable with Unicode paths).
+    for script_name in ['agent_bbs.py', 'agent_master.py']:
+        try:
+            cmd = (
+                f"Get-CimInstance Win32_Process -Filter "
+                f"\"CommandLine LIKE '%{script_name}%' AND CommandLine LIKE '%{name}%'\" "
+                f"| Select-Object -ExpandProperty ProcessId"
+            )
+            r = subprocess.run(['powershell', '-Command', cmd],
+                               capture_output=True, text=True, timeout=5)
+            for line in r.stdout.strip().split('\n'):
+                line = line.strip()
+                try:
+                    pid = int(line)
+                    if pid != os.getpid():
+                        os.kill(pid, sig.SIGTERM)
+                except (ValueError, OSError):
+                    pass
+        except Exception:
+            pass
+    # Also kill by hive_dir path in command line (worker .ai.py scripts)
+    try:
+        safe_dir = hive_dir.replace("'", "''")
+        cmd = (
+            f"Get-CimInstance Win32_Process -Filter "
+            f"\"CommandLine LIKE '%{safe_dir}%'\" "
+            f"| Select-Object -ExpandProperty ProcessId"
+        )
+        r = subprocess.run(['powershell', '-Command', cmd],
+                           capture_output=True, text=True, timeout=5)
+        for line in r.stdout.strip().split('\n'):
+            line = line.strip()
+            try:
+                pid = int(line)
+                if pid != os.getpid():
+                    os.kill(pid, sig.SIGTERM)
+            except (ValueError, OSError):
+                pass
+    except Exception:
+        pass
 
 
 @app.route('/')
@@ -1273,8 +1602,27 @@ def _hot_reload_css():
 
 @app.route('/static/<filename:path>')
 def _static(filename):
-    return static_file(filename, root=WEB_DIR)
+    resp = static_file(filename, root=WEB_DIR)
+    # Ensure correct MIME for JS modules (bottle may return text/plain)
+    if filename.endswith('.js') or filename.endswith('.mjs'):
+        resp.content_type = 'application/javascript; charset=utf-8'
+    elif filename.endswith('.json'):
+        resp.content_type = 'application/json; charset=utf-8'
+    elif filename.endswith('.wasm'):
+        resp.content_type = 'application/wasm'
+    return resp
 
+
+_UPLOAD_MAX_SIZE = 50 * 1024 * 1024  # 50 MB (must match frontend MAX_FILE_SIZE)
+_UPLOAD_ALLOWED_EXTENSIONS = {
+    '.txt', '.md', '.py', '.js', '.ts', '.json', '.yaml', '.yml', '.toml', '.ini', '.cfg',
+    '.csv', '.tsv', '.log', '.xml', '.html', '.css', '.scss', '.less',
+    '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp', '.svg', '.ico',
+    '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+    '.zip', '.tar', '.gz', '.bz2', '.7z', '.rar',
+    '.c', '.cpp', '.h', '.hpp', '.java', '.go', '.rs', '.rb', '.php',
+    '.sql', '.db', '.sqlite', '.sh', '.bat', '.ps1',
+}
 
 @app.route('/api/upload', method='POST')
 def _upload():
@@ -1283,9 +1631,21 @@ def _upload():
     if not f:
         response.status = 400
         return {'error': 'no file'}
+    # File size check
+    f.file.seek(0, 2)
+    file_size = f.file.tell()
+    f.file.seek(0)
+    if file_size > _UPLOAD_MAX_SIZE:
+        response.status = 413
+        return {'error': f'File too large ({file_size} bytes, max {_UPLOAD_MAX_SIZE})'}
+    # Extension check
+    safe_name = os.path.basename(f.filename) or f'upload_{int(time.time())}'
+    _, ext = os.path.splitext(safe_name).lower()
+    if ext and ext not in _UPLOAD_ALLOWED_EXTENSIONS:
+        response.status = 415
+        return {'error': f'File type {ext} not allowed'}
     up_dir = os.path.join(ROOT, 'temp', 'uploads')
     os.makedirs(up_dir, exist_ok=True)
-    safe_name = os.path.basename(f.filename) or f'upload_{int(time.time())}'
     dest = os.path.join(up_dir, f'{int(time.time()*1000)}_{safe_name}')
     f.save(dest, overwrite=True)
     response.content_type = 'application/json'
@@ -2060,17 +2420,31 @@ def _mcp_create():
 
 @app.route('/api/mcp/test', method='POST')
 def _mcp_test():
-    """Test call an MCP tool."""
+    """Test MCP server connectivity or call a specific tool.
+    If only 'server' is provided, tests connectivity by listing tools.
+    If 'server' + 'tool' are provided, calls that specific tool."""
     d = request.json
     server = d.get('server', '')
     tool = d.get('tool', '')
     arguments = d.get('arguments', {})
-    if not server or not tool:
-        response.status = 400; return {'error': 'server and tool required'}
+    if not server:
+        response.status = 400; return {'error': 'server required'}
     mgr = _get_mcp_mgr()
     if not mgr:
         response.status = 503; return {'error': 'MCP manager not initialized'}
     try:
+        if not tool:
+            # Connectivity test: try to list tools from the server
+            if server not in mgr.clients:
+                return {'ok': False, 'error': f'Server {server} not connected. Try reload first.'}
+            client = mgr.clients[server]
+            tool_count = len(client.tools) if hasattr(client, 'tools') else 0
+            tool_names = []
+            if hasattr(client, 'tools'):
+                for t in client.tools:
+                    tool_names.append(t.name if hasattr(t, 'name') else str(t))
+            return {'ok': True, 'result': {'status': 'connected', 'tools': tool_names, 'tool_count': tool_count}}
+        # Specific tool call
         result = mgr.call_tool(server, tool, arguments)
         return {'ok': True, 'result': result}
     except Exception as e:

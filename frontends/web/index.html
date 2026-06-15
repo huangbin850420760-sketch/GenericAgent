@@ -5,28 +5,36 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>GenericAgent</title>
 
-  <!-- Tailwind CSS v3 via Play CDN -->
-  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Google Fonts 已移除(CDN被墙), 使用系统字体回退 -->
+
+  <!-- Tailwind CSS v3 via Play CDN (CDN失败时用本地回退,避免 tailwind.config 抛错阻断) -->
+  <script src="https://cdn.tailwindcss.com" onerror="this.remove();window.__twFailed=true"></script>
   <script>
+    // CDN墙时 tailwind 未定义, 用 try 避免阻断后续脚本
+    try {
     tailwind.config = {
       theme: {
         extend: {
           colors: {
-            ink: { 950: '#0d0d0d', 900: '#111111', 850: '#171717', 800: '#1a1a1a', 700: '#222222', 600: '#2a2a2a', 500: '#333333' },
-            frost: { 50: '#f7f7f8', 100: '#e8e8e8', 200: '#c0c0c0', 300: '#999999', 400: '#777777', 500: '#555555' },
-            brand: { 50: '#e6f7f2', 100: '#b3e8d8', 400: '#10a37f', 500: '#0d8c6d', 600: '#0a7559', 700: '#085e47' },
-            accent: { green: '#10a37f', amber: '#fbbf24', rose: '#fb7185', violet: '#10a37f', pink: '#f59e0b' },
+            ink: { 950: '#0a0a0f', 900: '#0f0f18', 850: '#141422', 800: '#1a1a2e', 700: '#22223b', 600: '#2a2a42', 500: '#333355' },
+            frost: { 50: '#f0f0ff', 100: '#e2e2f0', 200: '#c4c4dc', 300: '#9696b8', 400: '#6a6a94', 500: '#4a4a70' },
+            brand: { 50: '#eef2ff', 100: '#c7d2fe', 200: '#a5b4fc', 300: '#818cf8', 400: '#6366f1', 500: '#4f46e5', 600: '#4338ca', 700: '#3730a3' },
+            accent: { green: '#059669', amber: '#f59e0b', rose: '#fb7185', violet: '#8b5cf6', pink: '#ec4899', indigo: '#6366f1' },
           },
           fontFamily: {
-            sans: ['"Inter"', '"Segoe UI Variable"', '"Segoe UI"', '"PingFang SC"', '"Microsoft YaHei UI"', 'system-ui', 'sans-serif'],
+            heading: ['"Space Grotesk"', '"Segoe UI Variable"', 'system-ui', 'sans-serif'],
+            sans: ['"DM Sans"', '"Inter"', '"Segoe UI Variable"', '"PingFang SC"', '"Microsoft YaHei UI"', 'system-ui', 'sans-serif'],
             mono: ['"JetBrains Mono"', '"Cascadia Code"', '"SF Mono"', 'Consolas', 'monospace'],
           },
           boxShadow: {
-            'inset-t': 'inset 0 1px 0 0 rgba(255,255,255,0.05)',
-            'glow': '0 0 0 4px rgba(74,158,255,0.2)',
-            'soft': '0 4px 14px rgba(0,0,0,0.35)',
-            'pop': '0 16px 50px -8px rgba(0,0,0,0.55)',
-            'brand': '0 6px 20px -4px rgba(74,158,255,0.45)',
+            'inset-t': 'inset 0 1px 0 0 rgba(255,255,255,0.06)',
+            'glow': '0 0 0 4px rgba(99,102,241,0.25)',
+            'soft': '0 4px 14px rgba(0,0,0,0.4)',
+            'pop': '0 16px 50px -8px rgba(0,0,0,0.6)',
+            'brand': '0 6px 24px -4px rgba(99,102,241,0.5)',
+            'glass': '0 8px 32px rgba(0,0,0,0.3)',
+            'card': '0 2px 8px rgba(0,0,0,0.2), 0 0 0 1px rgba(255,255,255,0.05)',
+            'card-hover': '0 8px 24px rgba(0,0,0,0.35), 0 0 0 1px rgba(99,102,241,0.15)',
           },
           animation: {
             'fade-in': 'fadeIn 0.2s ease-out',
@@ -44,22 +52,31 @@
         },
       },
     };
+    } catch(e) { console.warn('[Tailwind] CDN加载失败, 跳过config (样式可能退化)'); }
   </script>
 
-  <!-- Inter & JetBrains Mono -->
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <!-- Three.js importmap (CDN, pet3d装饰性功能; 本地无three.global.js故保留CDN) -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.164.1/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.164.1/examples/jsm/"
+    }
+  }
+  </script>
 
-  <!-- Code highlighting & Markdown -->
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark-dimmed.min.css">
-  <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <!-- Inter & JetBrains Mono (Google Fonts 已移除, CDN被墙, 用系统字体回退) -->
 
-  <!-- Lucide icons -->
-  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+  <!-- Code highlighting & Markdown (hljs theme switched dynamically by applyTheme in app.js) -->
+  <link id="hljs-theme" rel="stylesheet" href="/static/vendor/github-dark-dimmed.min.css">
+  <script src="/static/vendor/highlight.min.js"></script>
+  <script src="/static/vendor/marked.min.js"></script>
+  <script src="/static/vendor/purify.min.js"></script>
 
-  <link rel="stylesheet" href="/static/app.css">
+  <!-- Lucide icons (本地化, 原unpkg CDN被墙) -->
+  <script src="/static/vendor/lucide.min.js"></script>
+
+  <link rel="stylesheet" href="/static/app.css?v=2026061206">
   <style>
     /* SOP tab active/inactive states */
     .sop-tab-btn { padding: 6px 14px; border-radius: 10px; font-size: 13px; font-weight: 500; color: #a0a4b8; background: transparent; border: none; cursor: pointer; transition: all 0.15s; }
@@ -101,6 +118,9 @@
         </button>
         <button data-tab="mcp" class="tab-btn w-full flex items-center gap-2.5 px-3 py-[7px] rounded-md text-[13px] transition">
           <i data-lucide="plug" class="w-[15px] h-[15px]"></i><span>MCP</span>
+        </button>
+        <button data-tab="viz" class="tab-btn w-full flex items-center gap-2.5 px-3 py-[7px] rounded-md text-[13px] transition">
+          <i data-lucide="box" class="w-[15px] h-[15px]"></i><span>3D</span>
         </button>
         <button data-tab="settings" class="tab-btn w-full flex items-center gap-2.5 px-3 py-[7px] rounded-md text-[13px] transition">
           <i data-lucide="settings" class="w-[15px] h-[15px]"></i><span>设置</span>
@@ -144,6 +164,10 @@
             <i data-lucide="sun" class="w-3.5 h-3.5 theme-icon-light hidden"></i>
           </button>
         </div>
+      </div>
+      <!-- Sidebar resize handle -->
+      <div id="sidebar-resize-handle" class="absolute top-0 right-0 w-[5px] h-full cursor-col-resize z-50 group" aria-label="拖拽调节侧边栏宽度">
+        <div class="absolute inset-y-0 left-1/2 -translate-x-1/2 w-[3px] rounded-full opacity-0 group-hover:opacity-100 transition-opacity duration-200" style="background:linear-gradient(180deg,rgba(99,102,241,0.6),rgba(139,92,246,0.6),rgba(99,102,241,0.6))"></div>
       </div>
     </div>
 
@@ -233,6 +257,25 @@
               <span><kbd class="kbd">Enter</kbd> 发送</span>
               <span><kbd class="kbd">Shift</kbd>+<kbd class="kbd">Enter</kbd> 换行</span>
               <span><kbd class="kbd">Esc</kbd> 停止</span>
+            </div>
+            <!-- Quick Suggestions -->
+            <div class="grid grid-cols-2 gap-2.5 mt-8 w-full max-w-lg">
+              <button class="quick-suggest" data-prompt="帮我分析一下当前项目的代码质量">
+                <span class="quick-suggest-icon">📊</span>
+                <div class="flex flex-col items-start text-left"><span class="quick-suggest-title">代码质量分析</span><span class="quick-suggest-desc">审查项目结构和代码规范</span></div>
+              </button>
+              <button class="quick-suggest" data-prompt="帮我写一个Python脚本自动化这个任务">
+                <span class="quick-suggest-icon">🐍</span>
+                <div class="flex flex-col items-start text-left"><span class="quick-suggest-title">Python自动化</span><span class="quick-suggest-desc">生成自动化脚本</span></div>
+              </button>
+              <button class="quick-suggest" data-prompt="总结今天的对话要点，整理成文档">
+                <span class="quick-suggest-icon">📝</span>
+                <div class="flex flex-col items-start text-left"><span class="quick-suggest-title">对话总结</span><span class="quick-suggest-desc">整理要点生成文档</span></div>
+              </button>
+              <button class="quick-suggest" data-prompt="帮我搜索最新的AI Agent技术趋势">
+                <span class="quick-suggest-icon">🔍</span>
+                <div class="flex flex-col items-start text-left"><span class="quick-suggest-title">技术趋势</span><span class="quick-suggest-desc">搜索最新AI Agent动态</span></div>
+              </button>
             </div>
           </div>
         </div>
@@ -377,6 +420,154 @@
             <div id="capability-report-cards" class="mt-4 space-y-3 hidden"></div>
           </section>
 
+          <!-- 🐾 Pet Customization -->
+          <section>
+            <div class="flex items-center gap-2 mb-4">
+              <i data-lucide="cat" class="w-4 h-4 text-accent-pink"></i>
+              <h3 class="text-[15px] font-semibold text-frost-100">桌面宠物</h3>
+            </div>
+            <div class="settings-card space-y-5">
+              <!-- Enable / Disable -->
+              <label class="flex items-center justify-between">
+                <div>
+                  <div class="text-[13px] font-medium text-frost-100">启用宠物</div>
+                  <div class="text-[11.5px] text-frost-400 mt-0.5">在左下角显示3D互动宠物</div>
+                </div>
+                <label class="relative inline-flex items-center cursor-pointer">
+                  <input type="checkbox" id="pet-enabled" class="sr-only peer" checked>
+                  <div class="w-10 h-5 bg-white/10 peer-checked:bg-gradient-to-r peer-checked:from-accent-pink peer-checked:to-accent-violet rounded-full transition"></div>
+                  <div class="absolute left-0.5 top-0.5 bg-white w-4 h-4 rounded-full shadow transition peer-checked:translate-x-5"></div>
+                </label>
+              </label>
+
+              <!-- Pet Type -->
+              <div>
+                <div class="text-[13px] font-medium text-frost-100 mb-2">宠物类型</div>
+                <div class="grid grid-cols-3 gap-2" id="pet-type-selector">
+                  <button data-pet="cat" class="pet-pick-btn active flex flex-col items-center gap-1.5 py-3 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 transition text-center">
+                    <span class="text-2xl">🐱</span>
+                    <span class="text-[11px] text-frost-200 font-medium">猫猫</span>
+                  </button>
+                  <button data-pet="dog" class="pet-pick-btn flex flex-col items-center gap-1.5 py-3 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 transition text-center">
+                    <span class="text-2xl">🐶</span>
+                    <span class="text-[11px] text-frost-200 font-medium">狗狗</span>
+                  </button>
+                  <button data-pet="penguin" class="pet-pick-btn flex flex-col items-center gap-1.5 py-3 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 transition text-center">
+                    <span class="text-2xl">🐧</span>
+                    <span class="text-[11px] text-frost-200 font-medium">企鹅</span>
+                  </button>
+                  <button data-pet="rabbit" class="pet-pick-btn flex flex-col items-center gap-1.5 py-3 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 transition text-center">
+                    <span class="text-2xl">🐰</span>
+                    <span class="text-[11px] text-frost-200 font-medium">兔兔</span>
+                  </button>
+                  <button data-pet="hamster" class="pet-pick-btn flex flex-col items-center gap-1.5 py-3 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 transition text-center">
+                    <span class="text-2xl">🐹</span>
+                    <span class="text-[11px] text-frost-200 font-medium">仓鼠</span>
+                  </button>
+                  <button data-pet="fox" class="pet-pick-btn flex flex-col items-center gap-1.5 py-3 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 transition text-center">
+                    <span class="text-2xl">🦊</span>
+                    <span class="text-[11px] text-frost-200 font-medium">狐狸</span>
+                  </button>
+                  <button data-pet="panda" class="pet-pick-btn flex flex-col items-center gap-1.5 py-3 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 transition text-center">
+                    <span class="text-2xl">🐼</span>
+                    <span class="text-[11px] text-frost-200 font-medium">熊猫</span>
+                  </button>
+                </div>
+              </div>
+
+              <!-- Mode toggle: 3D animals ↔ Live2D anime -->
+              <div class="flex items-center justify-between py-2">
+                <div>
+                  <div class="text-[13px] font-medium text-frost-100">动漫少女模式</div>
+                  <div class="text-[11px] text-frost-400 mt-0.5">切换为 Live2D 动漫形象（重启生效）</div>
+                </div>
+                <label class="relative inline-flex items-center cursor-pointer">
+                  <input type="checkbox" id="pet-mode-toggle" class="sr-only peer">
+                  <div class="w-10 h-5 bg-white/10 peer-checked:bg-gradient-to-r peer-checked:from-accent-pink peer-checked:to-accent-violet rounded-full transition"></div>
+                  <div class="absolute left-0.5 top-0.5 bg-white w-4 h-4 rounded-full shadow transition peer-checked:translate-x-5"></div>
+                </label>
+              </div>
+
+              <!-- Live2D model selector (only relevant in live2d mode) -->
+              <div>
+                <div class="text-[13px] font-medium text-frost-100 mb-2">动漫形象</div>
+                <div class="grid grid-cols-3 gap-2" id="pet-live-selector">
+                  <button data-live="shizuku" class="pet-pick-btn flex flex-col items-center gap-1.5 py-3 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 transition text-center">
+                    <span class="text-[11px] text-frost-200 font-medium">雫 Shizuku</span>
+                    <span class="text-[9px] text-frost-400">Cubism 2.1</span>
+                  </button>
+                  <button data-live="haru" class="pet-pick-btn flex flex-col items-center gap-1.5 py-3 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 transition text-center">
+                    <span class="text-[11px] text-frost-200 font-medium">春 Haru</span>
+                    <span class="text-[9px] text-frost-400">Cubism 4</span>
+                  </button>
+                  <button data-live="siluokayi" class="pet-pick-btn flex flex-col items-center gap-1.5 py-3 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 transition text-center">
+                    <span class="text-[11px] text-frost-200 font-medium">丝罗卡伊</span>
+                    <span class="text-[9px] text-frost-400">Cubism 2</span>
+                  </button>
+                  <button data-live="yiselin" class="pet-pick-btn flex flex-col items-center gap-1.5 py-3 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 transition text-center">
+                    <span class="text-[11px] text-frost-200 font-medium">伊瑟琳</span>
+                    <span class="text-[9px] text-frost-400">Cubism 2</span>
+                  </button>
+                  <button data-live="kp31" class="pet-pick-btn flex flex-col items-center gap-1.5 py-3 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 transition text-center">
+                    <span class="text-[11px] text-frost-200 font-medium">KP31</span>
+                    <span class="text-[9px] text-frost-400">Cubism 2</span>
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <div class="flex items-center justify-between mb-2">
+                  <div class="text-[13px] font-medium text-frost-100">宠物大小</div>
+                  <span id="pet-size-value" class="text-[11px] text-frost-400 font-mono">160px</span>
+                </div>
+                <input type="range" id="pet-size" min="80" max="260" value="160" step="20"
+                  class="w-full h-1.5 bg-white/10 rounded-full appearance-none cursor-pointer
+                  [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4
+                  [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-gradient-to-br
+                  [&::-webkit-slider-thumb]:from-accent-pink [&::-webkit-slider-thumb]:to-accent-violet
+                  [&::-webkit-slider-thumb]:shadow-lg [&::-webkit-slider-thumb]:cursor-pointer">
+              </div>
+
+              <!-- Interaction -->
+              <div>
+                <div class="text-[13px] font-medium text-frost-100 mb-3">互动行为</div>
+                <div class="space-y-2.5">
+                  <label class="flex items-center justify-between">
+                    <div class="text-[12px] text-frost-200">鼠标悬停打招呼</div>
+                    <label class="relative inline-flex items-center cursor-pointer">
+                      <input type="checkbox" id="pet-interact-hover" class="sr-only peer" checked>
+                      <div class="w-8 h-4 bg-white/10 peer-checked:bg-accent-pink/60 rounded-full transition"></div>
+                      <div class="absolute left-0.5 top-0.5 bg-white w-3 h-3 rounded-full shadow transition peer-checked:translate-x-4"></div>
+                    </label>
+                  </label>
+                  <label class="flex items-center justify-between">
+                    <div class="text-[12px] text-frost-200">点击显示消息</div>
+                    <label class="relative inline-flex items-center cursor-pointer">
+                      <input type="checkbox" id="pet-interact-click" class="sr-only peer" checked>
+                      <div class="w-8 h-4 bg-white/10 peer-checked:bg-accent-pink/60 rounded-full transition"></div>
+                      <div class="absolute left-0.5 top-0.5 bg-white w-3 h-3 rounded-full shadow transition peer-checked:translate-x-4"></div>
+                    </label>
+                  </label>
+                  <label class="flex items-center justify-between">
+                    <div class="text-[12px] text-frost-200">执行工具气泡通知</div>
+                    <label class="relative inline-flex items-center cursor-pointer">
+                      <input type="checkbox" id="pet-interact-notify" class="sr-only peer" checked>
+                      <div class="w-8 h-4 bg-white/10 peer-checked:bg-accent-pink/60 rounded-full transition"></div>
+                      <div class="absolute left-0.5 top-0.5 bg-white w-3 h-3 rounded-full shadow transition peer-checked:translate-x-4"></div>
+                    </label>
+                  </label>
+                </div>
+              </div>
+
+              <!-- Custom Name -->
+              <div>
+                <label class="text-[13px] font-medium text-frost-100 block mb-1.5">宠物昵称</label>
+                <input type="text" id="pet-name" placeholder="给宠物取个名字…" maxlength="20"
+                  class="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-[13px] text-frost-100 placeholder:text-frost-500 outline-none focus:border-accent-pink/50 transition">
+              </div>
+            </div>
+          </section>
+
           <!-- Footer actions -->
           <div class="flex gap-3 pt-2">
             <button id="btn-save-config" class="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl bg-gradient-to-br from-brand-400 to-brand-600 hover:brightness-110 active:scale-[0.98] text-white font-medium transition shadow-brand">
@@ -436,6 +627,29 @@
               <button id="mcp-add-confirm" class="px-4 py-1.5 rounded-lg bg-brand-500 text-white text-[12px] font-medium hover:bg-brand-600 transition">确认添加</button>
               <button id="mcp-add-cancel" class="px-4 py-1.5 rounded-lg bg-white/8 text-frost-300 text-[12px] font-medium hover:bg-white/14 transition">取消</button>
             </div>
+          </div>
+        </div>
+      </main>
+
+      <!-- ─── 3D Visualization view ─── -->
+      <main id="view-3d" class="hidden flex-1 overflow-hidden relative bg-[#1a1a2e]">
+        <!-- Toolbar overlay -->
+        <div id="viz-toolbar" class="absolute top-4 left-4 z-10 flex items-center gap-2">
+          <button id="viz-scene-town" class="px-3 py-1.5 rounded-lg bg-white/10 text-frost-200 text-[12px] font-medium hover:bg-white/20 transition backdrop-blur-sm border border-white/10">🏘 小镇</button>
+          <button id="viz-scene-office" class="px-3 py-1.5 rounded-lg bg-white/10 text-frost-200 text-[12px] font-medium hover:bg-white/20 transition backdrop-blur-sm border border-white/10">🏢 办公室</button>
+          <button id="viz-reset-cam" class="px-3 py-1.5 rounded-lg bg-white/10 text-frost-200 text-[12px] font-medium hover:bg-white/20 transition backdrop-blur-sm border border-white/10" title="重置视角">⟳</button>
+        </div>
+        <!-- Status overlay -->
+        <div id="viz-status" class="absolute bottom-4 left-4 z-10 px-3 py-1.5 rounded-lg bg-black/50 text-frost-300 text-[11px] backdrop-blur-sm border border-white/5">
+          Agent状态: <span id="viz-agent-state" class="text-frost-100">空闲</span>
+        </div>
+        <!-- 3D Canvas container -->
+        <div id="viz-canvas-container" class="w-full h-full"></div>
+        <!-- Loading overlay -->
+        <div id="viz-loading" class="absolute inset-0 flex items-center justify-center bg-[#1a1a2e]/90 z-20">
+          <div class="text-frost-300 text-sm flex items-center gap-2">
+            <svg class="animate-spin w-4 h-4" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" stroke-dasharray="60 30" stroke-linecap="round"/></svg>
+            加载3D场景...
           </div>
         </div>
       </main>
@@ -570,11 +784,7 @@
               </div>
               <div class="flex justify-end gap-2 pt-2">
                 <button id="btn-hive-cancel" class="px-4 py-2 rounded-lg bg-white/8 hover:bg-white/14 text-frost-200 text-[12.5px] font-medium transition">取消</button>
-                <button id="btn-hive-create" class="px-4 py-2 rounded-lg bg-gradient-to-br from-accent-violet to-accent-pink hover:brightness-110 text-white text-[12.5px] font-medium transition">生成启动命令</button>
-              </div>
-              <div id="hive-commands" class="hidden mt-3 p-3 bg-ink-900 border border-white/8 rounded-xl">
-                <div class="text-[11px] text-frost-400 mb-2 font-medium">启动命令（复制到终端执行）</div>
-                <pre id="hive-commands-text" class="text-[11px] text-brand-300 font-mono whitespace-pre-wrap"></pre>
+                <button id="btn-hive-create" class="px-4 py-2 rounded-lg bg-gradient-to-br from-accent-violet to-accent-pink hover:brightness-110 text-white text-[12.5px] font-medium transition">启动集群</button>
               </div>
             </div>
           </section>
@@ -879,8 +1089,8 @@
     </div>
   </div>
 
-  <script src="/static/api.js?v=2"></script>
-  <script src="/static/app.js?v=1780971792"></script>
+  <script src="/static/api.js?v=20260612b"></script>
+  <script src="/static/app.js?v=2026061206"></script>
 
   <!-- ═════ Hot-Reload: auto-detect file changes, CSS无感替换, JS提示重载 ═════ -->
   <script>
@@ -963,6 +1173,82 @@
     setInterval(_hr_poll, HR_INTERVAL);
     console.log('[HotReload] 🔥 polling every', HR_INTERVAL, 'ms');
   })();
+  </script>
+
+  <!-- ═══════════ Desktop Pet (bottom-left) — 3D animals OR Live2D anime ═══════════ -->
+  <div id="pet-container" class="pet-container">
+    <canvas id="pet-canvas" width="160" height="160"></canvas>
+    <canvas id="pet-canvas-l2d" width="200" height="200" style="display:none;"></canvas>
+  </div>
+  <script>
+    // ── Pet loader: reads mode from localStorage, routes to pet3d (3D) or live2d_pet (anime) ──
+    (async () => {
+      const showErr = (msg) => {
+        const c = document.getElementById('pet-container');
+        if (c) {
+          c.style.background = 'rgba(255,80,80,0.9)';
+          c.style.color = '#fff';
+          c.style.fontSize = '11px';
+          c.style.padding = '6px';
+          c.style.width = '220px';
+          c.style.borderRadius = '6px';
+          c.textContent = '🌸宠物加载失败: ' + String(msg).slice(0, 200);
+        }
+      };
+      // 读取宠物配置 (storage key 与 app.js 一致: ga_pet_config)
+      let mode = '3d', liveModel = 'shizuku';
+      try {
+        const raw = localStorage.getItem('ga_pet_config');
+        if (raw) {
+          const cfg = JSON.parse(raw);
+          if (cfg.mode) mode = cfg.mode;
+          // 优先读 liveModel (app.js 存这个), 兼容旧 type
+          const m = cfg.liveModel || cfg.type;
+          if (m) liveModel = m;  // 不再限制白名单，initLive2DPet 内部兜底
+        }
+      } catch (e) { /* 默认3d */ }
+
+      // 切换显示哪个 canvas + 根据 mode 定位容器 (互斥)
+      //   live2d 动漫形象 → 窗口右下角
+      //   3d 宠物        → 窗口左下角
+      const c3d = document.getElementById('pet-canvas');
+      const cl2 = document.getElementById('pet-canvas-l2d');
+      const pc = document.getElementById('pet-container');
+      if (pc) {
+        if (mode === 'live2d') { pc.style.right = '16px'; pc.style.left = 'auto'; }
+        else { pc.style.left = '16px'; pc.style.right = 'auto'; }
+      }
+      if (mode === 'live2d') {
+        if (c3d) c3d.style.display = 'none';
+        if (cl2) cl2.style.display = 'block';
+      }
+
+      // 捕获错误 (pywebview无F12)
+      window.addEventListener('error', (e) => {
+        if (e.filename && (e.filename.includes('pet3d') || e.filename.includes('live2d'))) showErr(e.message + ' @' + (e.lineno||'?'));
+      });
+      window.addEventListener('unhandledrejection', (e) => {
+        const m = e.reason && e.reason.message ? e.reason.message : String(e.reason);
+        showErr('Promise: ' + m);
+      });
+      try {
+        if (mode === 'live2d') {
+          // Live2D 模式: 加载 live2d_pet.js (非模块, 注册全局 window.initLive2DPet)
+          await import('./static/live2d_pet.js?v=2026061207');
+          if (typeof window.initLive2DPet === 'function') {
+            setTimeout(() => window.initLive2DPet(liveModel), 600);
+          }
+        } else {
+          // 3D 模式: 加载 pet3d.js
+          const mod = await import('./static/pet3d.js?v=20260612b');
+          if (typeof mod.initPet === 'function') {
+            setTimeout(mod.initPet, 500);
+          }
+        }
+      } catch (err) {
+        showErr(err && err.message ? err.message : String(err));
+      }
+    })();
   </script>
 </body>
 </html>

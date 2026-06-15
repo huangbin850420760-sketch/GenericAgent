@@ -2,6 +2,8 @@
    GenericAgent · UI (uses GA_API layer for all backend I/O)
    ═══════════════════════════════════════════════════ */
 (() => {
+  // FIX: ws referenced by context-panel code but never declared (causes ReferenceError that crashes the whole IIFE → all pet settings break). Declare as null so references are safe (WS context-panel features disabled until proper WS hookup exists).
+  var ws = null;
   // Safe storage wrapper - won't throw if storage is blocked (Edge Tracking Prevention etc.)
   const _storage = {
     get(k, fallback = null) { try { const v = localStorage.getItem(k); return v !== null ? v : fallback; } catch(e) { return fallback; } },
@@ -43,9 +45,19 @@
   const modalSubtitle = $('modal-subtitle');
   const modalIcon = $('modal-icon');
 
-  // Configure marked
+  // Configure marked (with XSS protection)
+  const _origMarkedRenderer = new marked.Renderer();
+  // Sanitize href to prevent javascript: protocol XSS
+  _origMarkedRenderer.link = function(href, title, text) {
+    const proto = (href || '').trim().toLowerCase();
+    if (proto.startsWith('javascript:') || proto.startsWith('data:') || proto.startsWith('vbscript:')) {
+      return escapeHTML(text);
+    }
+    return marked.Renderer.prototype.link.call(this, href, title, text);
+  };
   marked.setOptions({
     breaks: true, gfm: true,
+    renderer: _origMarkedRenderer,
     highlight: (code, lang) => {
       if (lang && hljs.getLanguage(lang)) {
         try { return hljs.highlight(code, { language: lang }).value; } catch {}
@@ -53,6 +65,10 @@
       try { return hljs.highlightAuto(code).value; } catch { return code; }
     },
   });
+
+  // Upload limits (frontend guard)
+  const MAX_IMAGE_SIZE = 10 * 1024 * 1024; // 10 MB
+  const MAX_FILE_SIZE = 50 * 1024 * 1024;  // 50 MB
 
   // State
   const state = {
@@ -84,18 +100,38 @@
       refreshSessions();
     },
     onclose: () => setStatus('连接断开，3秒后重连...', false, true),
-    on_status: (m) => updateStatus(m.payload),
+    on_status: (m) => {
+      try {
+        updateStatus(m.payload);
+        // Bridge to 3D viz: map running state to viz status enum
+        const p = m.payload || {};
+        const vizStatus = p.running ? 'working' : 'idle';
+        window.dispatchEvent(new CustomEvent('agent-state', { detail: { status: vizStatus } }));
+      } catch(e) { console.error('[WS on_status]', e); }
+    },
     on_stream: (m) => {
-      if (state.viewingSessionPath) returnToActive();
-      appendAssistantStream(m.full);
+      try {
+        if (state.viewingSessionPath) returnToActive();
+        const full = (m && m.full) || '';
+        appendAssistantStream(full);
+        // Bridge: detect tool calls in stream for 3D viz
+        const toolMatch = full.match(/\[([A-Za-z_]+)\]/g);
+        if (toolMatch) {
+          window.dispatchEvent(new CustomEvent('agent-state', { detail: { type: 'tool-call', tools: toolMatch.map(t => t.replace(/[\[\]]/g, '')) } }));
+        }
+      } catch(e) { console.error('[WS on_stream]', e); }
     },
     on_done: (m) => {
-      // T1.5.2: 提取experience标记
-      if (m.has_experience) { state.lastHasExperience = true; state.lastExperienceIds = m.experience_ids || []; }
-      finalizeAssistant(m.payload); setRunning(false); refreshSessions();
+      try {
+        // T1.5.2: 提取experience标记
+        if (m && m.has_experience) { state.lastHasExperience = true; state.lastExperienceIds = m.experience_ids || []; }
+        finalizeAssistant(m && m.payload); setRunning(false); refreshSessions();
+        // Bridge to 3D viz
+        window.dispatchEvent(new CustomEvent('agent-state', { detail: { status: 'done' } }));
+      } catch(e) { console.error('[WS on_done]', e); setRunning(false); }
     },
-    on_info: (m) => showToast(m.payload, 'info'),
-    on_error: (m) => { showToast(m.payload, 'error'); setRunning(false); },
+    on_info: (m) => showToast((m && m.payload) || '', 'info'),
+    on_error: (m) => { showToast((m && m.payload) || '未知错误', 'error'); setRunning(false); },
     on_experience: (m) => { if (statusExp) { statusExp.classList.add('has-data'); statusExp.title = `经验: ${m.payload?.summary || '已提取'}`; } state.lastHasExperience = true; if (m.payload?.id) { if (!state.lastExperienceIds) state.lastExperienceIds = []; state.lastExperienceIds.push(m.payload.id); } },
     on_preference: (m) => { if (statusPref) { statusPref.classList.add('has-data'); statusPref.title = `偏好: ${m.payload?.key || '已学习'}`; } },
     on_error_recovery: (m) => { if (statusErr) { statusErr.classList.add('visible'); statusErr.title = `恢复: ${m.payload?.strategy || '已激活'}`; } },
@@ -119,6 +155,8 @@
       addAssistantPlaceholder();
       setRunning(true);
       showToast('🤖 自主行动已触发', 'info');
+      // Bridge to 3D viz
+      window.dispatchEvent(new CustomEvent('agent-state', { detail: { status: 'working' } }));
     },
     // ── T3 WS handlers: SOP suggestion / SOP stats / MCP recommend ──
     on_sop_suggestion: (m) => {
@@ -140,19 +178,14 @@
       const p = m.payload || {};
       showPreviewPanel(p);
     },
-    // ── T4.2: Execution step timeline (throttled 500ms) ──
-    _stepQueue: [],
-    _stepTimer: null,
+    // ── Execution step → notify 3D pet ──
     on_execution_step: (m) => {
-      const p = m.payload || {};
-      if (!state._stepQueue) state._stepQueue = [];
-      state._stepQueue.push(p);
-      if (!state._stepTimer) {
-        state._stepTimer = setTimeout(() => {
-          const batch = state._stepQueue.splice(0);
-          state._stepTimer = null;
-          batch.forEach(s => appendTimelineStep(s));
-        }, 500);
+      // Notify pet about tool execution
+      if (window.__petNotify && m.payload) {
+        const p = m.payload;
+        const icons = { running: '⏳', success: '✅', error: '❌' };
+        const txt = `${icons[p.status]||'⚪'} ${p.tool||'?'}`;
+        window.__petNotify(txt);
       }
     },
   });
@@ -192,6 +225,7 @@
       sendBtn.title = '发送 (Enter)';
       if (icSend) icSend.classList.remove('hidden');
       if (icStop) icStop.classList.add('hidden');
+      if (typeof _showSuggestions === 'function') _showSuggestions();
     }
   }
   setInterval(() => {
@@ -243,23 +277,27 @@
 
   function switchTab(tab) {
     state.tab = tab;
-    // Sync sidebar nav buttons
-    document.querySelectorAll('#sidebar .tab-btn, #sidebar [data-tab]').forEach(b =>
-      b.classList.toggle('active', b.dataset.tab === tab));
-    // Sync collapsed rail buttons
-    document.querySelectorAll('#sidebar-rail [data-tab]').forEach(b =>
-      b.classList.toggle('active', b.dataset.tab === tab));
-    // Toggle right-side views only
-    $('view-chat').classList.toggle('hidden', tab !== 'chat');
-    $('view-chat').classList.toggle('flex', tab === 'chat');
-    $('view-skills').classList.toggle('hidden', tab !== 'skills');
-    $('view-settings').classList.toggle('hidden', tab !== 'settings');
-    $('view-tasks').classList.toggle('hidden', tab !== 'tasks');
-    $('view-mcp').classList.toggle('hidden', tab !== 'mcp');
-    if (tab === 'skills') loadSkills();
-    if (tab === 'settings') loadConfig();
-    if (tab === 'tasks') initTasksView();
-    if (tab === 'mcp') loadMCPPanel();
+    try {
+      // Sync sidebar nav buttons
+      document.querySelectorAll('#sidebar .tab-btn, #sidebar [data-tab]').forEach(b =>
+        b.classList.toggle('active', b.dataset.tab === tab));
+      // Sync collapsed rail buttons
+      document.querySelectorAll('#sidebar-rail [data-tab]').forEach(b =>
+        b.classList.toggle('active', b.dataset.tab === tab));
+      // Toggle right-side views (safe: skip if element missing)
+      const views = { 'view-chat': 'chat', 'view-skills': 'skills', 'view-settings': 'settings', 'view-tasks': 'tasks', 'view-mcp': 'mcp', 'view-3d': 'viz' };
+      for (const [id, t] of Object.entries(views)) {
+        const el = $(id);
+        if (!el) continue;
+        el.classList.toggle('hidden', tab !== t);
+        if (id === 'view-chat') el.classList.toggle('flex', tab === t);
+      }
+      if (tab === 'viz') loadVizPanel();
+      if (tab === 'skills') loadSkills();
+      if (tab === 'settings') { loadConfig(); if (!window._petSettingsInited) { window._petSettingsInited = true; setTimeout(initPetSettings, 200); } }
+      if (tab === 'tasks') initTasksView();
+      if (tab === 'mcp') loadMCPPanel();
+    } catch(e) { console.error('[switchTab]', tab, e); }
   }
   switchTab('chat');
 
@@ -356,7 +394,9 @@
   async function restoreAndShow(path) {
     try {
       const r = await API.restoreSession(path);
-      state.currentSessionPath = path;
+      // 不设置 currentSessionPath = path：restore后新对话写入pid日志文件，
+      // 而非restore的快照文件；保持null让侧边栏正确高亮活跃session
+      state.currentSessionPath = null;
       state.viewingSessionPath = null;
       state.savedActiveHTML = null;
       // Derive title from the first user message (fallback: filename)
@@ -689,26 +729,12 @@
       state.lastExperienceIds = [];
     }
     state.pendingAssistant.classList.remove('streaming');
-    // T3.4.2: 注入Tool Flow SVG可视化
-    try {
-      const toolRe = /\*{0,2}(file_read|file_patch|file_write|code_run|web_scan|web_execute_js|mcp_tool|update_working_checkpoint|start_long_term_update|ask_user)\b/gi;
-      const toolCalls = [...new Set((fullText.match(toolRe) || []))];
-      if (toolCalls.length > 0) {
-        const msgEl = state.pendingAssistant.closest('.msg') || state.pendingAssistant.parentElement;
-        if (msgEl) injectToolFlow(msgEl, toolCalls);
-      }
-    } catch(_e) { /* Tool Flow非关键，静默失败 */ }
     // T4.4.1: Micro-interaction animations
     try {
       const msgEl = state.pendingAssistant.closest('.msg') || state.pendingAssistant.parentElement;
       if (msgEl) {
         msgEl.classList.add('anim-msg-fade-in');
         msgEl.addEventListener('animationend', () => msgEl.classList.remove('anim-msg-fade-in'), { once: true });
-        // Tool node pulse
-        msgEl.querySelectorAll('.tool-flow-node').forEach(n => {
-          n.classList.add('anim-tool-pulse');
-          n.addEventListener('animationend', () => n.classList.remove('anim-tool-pulse'), { once: true });
-        });
       }
     } catch(_e2) {}
     state.pendingAssistant = null;
@@ -772,7 +798,7 @@
     const t = text
       .replace(/<thinking>([\s\S]*?)<\/thinking>/g, (_, c) => `\n\n<div class="thinking-block">💭 ${escapeHTML(c.trim())}</div>\n\n`)
       .replace(/<summary>([\s\S]*?)<\/summary>/g, (_, c) => `\n\n<div class="summary-block">${escapeHTML(c.trim())}</div>\n\n`);
-    try { return marked.parse(t); }
+    try { return typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(marked.parse(t)) : marked.parse(t); }
     catch { return escapeHTML(t).replace(/\n/g, '<br>'); }
   }
 
@@ -844,7 +870,7 @@
       el.classList.toggle('ring-1', i === idx);
       el.classList.toggle('ring-accent-amber/40', i === idx);
     });
-    items[idx]?.scrollIntoView({ block: 'nearest' });
+    items[idx]?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   }
 
   function _selectSlashCmd(cmdName) {
@@ -923,6 +949,48 @@
     else { sendTask(); }
   });
 
+  // Quick suggestion cards — fill input, show hint, focus
+  const _sendHintEl = document.createElement('div');
+  _sendHintEl.className = 'send-hint';
+  _sendHintEl.innerHTML = '按 <kbd class="kbd">Enter</kbd> 发送 · <kbd class="kbd">Esc</kbd> 取消';
+  _sendHintEl.style.cssText = 'display:none;text-align:center;margin-top:6px;color:rgba(148,163,184,0.7);font-size:12px;animation:fadeIn 0.3s ease';
+  const _suggestGrid = document.querySelector('.grid.grid-cols-2.gap-2\\.5');
+  if (_suggestGrid) _suggestGrid.parentNode.insertBefore(_sendHintEl, _suggestGrid.nextSibling);
+
+  document.querySelectorAll('.quick-suggest').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const prompt = btn.dataset.prompt;
+      if (prompt) {
+        // Visual feedback — pulse the clicked card
+        btn.style.transform = 'scale(0.96)';
+        setTimeout(() => { btn.style.transform = ''; }, 150);
+        inputEl.value = prompt;
+        autoResize();
+        inputEl.focus();
+        _sendHintEl.style.display = 'block';
+      }
+    });
+  });
+
+  // Hide send hint on input change or task send
+  inputEl.addEventListener('input', () => { _sendHintEl.style.display = 'none'; });
+  const _origSendTask = sendTask;
+  // Fade out suggestion cards when task starts
+  function _fadeSuggestions() {
+    if (_suggestGrid) {
+      _suggestGrid.style.transition = 'opacity 0.4s ease, transform 0.4s ease';
+      _suggestGrid.style.opacity = '0';
+      _suggestGrid.style.transform = 'translateY(-10px)';
+      _sendHintEl.style.display = 'none';
+    }
+  }
+  function _showSuggestions() {
+    if (_suggestGrid) {
+      _suggestGrid.style.opacity = '1';
+      _suggestGrid.style.transform = 'translateY(0)';
+    }
+  }
+
   function sendTask() {
     if (state.viewingSessionPath) returnToActive();
     const text = inputEl.value.trim();
@@ -940,6 +1008,7 @@
     state.attachments = []; renderAttachments();
     setRunning(true);
     addAssistantPlaceholder();
+    _fadeSuggestions();
   }
 
   /* ═════ Attachments ═════ */
@@ -985,11 +1054,13 @@
 
   async function addImageAttachment(file) {
     if (!file.type.startsWith('image/')) return;
+    if (file.size > MAX_IMAGE_SIZE) { showToast(`图片过大（上限 ${(MAX_IMAGE_SIZE/1024/1024).toFixed(0)}MB）`, 'error'); return; }
     const data_url = await readAsDataURL(file);
     state.attachments.push({ kind: 'image', name: file.name || 'pasted.png', data_url });
     renderAttachments();
   }
   async function addFileAttachment(file) {
+    if (file.size > MAX_FILE_SIZE) { showToast(`文件过大（上限 ${(MAX_FILE_SIZE/1024/1024).toFixed(0)}MB）`, 'error'); return; }
     try {
       const j = await API.uploadFile(file);
       if (j.path) {
@@ -1461,8 +1532,9 @@
   }
   function showToast(text, kind = 'info') {
     const t = document.createElement('div');
-    const cls = kind === 'error' ? ' error' : kind === 'success' ? ' success' : '';
+    const cls = kind === 'error' ? ' error toast-error' : kind === 'success' ? ' success toast-success' : ' toast-info';
     t.className = 'info-toast' + cls;
+    // Structure: icon (::before) + text + progress bar (::after)
     t.textContent = text;
     // T4.4.1: error toast shake animation
     if (kind === 'error') {
@@ -1472,10 +1544,9 @@
     }
     document.body.appendChild(t);
     setTimeout(() => {
-      t.style.transition = 'opacity 0.3s, transform 0.3s';
-      t.style.opacity = '0'; t.style.transform = 'translateX(10px)';
-      setTimeout(() => t.remove(), 300);
-    }, 3500);
+      t.classList.add('removing');
+      setTimeout(() => t.remove(), 260);
+    }, 4000);
   }
 
   /* ═════ Theme toggle (light/dark) ═════ */
@@ -1485,6 +1556,13 @@
     const isLight = theme === 'light';
     // Sync .theme-light class on body so both selector patterns work
     document.body.classList.toggle('theme-light', isLight);
+    // Switch highlight.js theme CSS to match (light=github浅色, dark=github-dark-dimmed)
+    const hljsLink = document.getElementById('hljs-theme');
+    if (hljsLink) {
+      hljsLink.href = isLight
+        ? '/static/vendor/github.min.css'
+        : '/static/vendor/github-dark-dimmed.min.css';
+    }
     document.querySelectorAll('.theme-icon-dark')
       .forEach(el => el.classList.toggle('hidden', isLight));
     document.querySelectorAll('.theme-icon-light')
@@ -1513,6 +1591,22 @@
       applyTheme(next);
     });
   }
+
+  /* ── 🅰️-4: Button Ripple Effect (delegated) ── */
+  document.addEventListener('click', e => {
+    const btn = e.target.closest('#btn-send, #btn-new-chat, .mode-btn, .skill-cat');
+    if (!btn) return;
+    const rect = btn.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    btn.style.setProperty('--ripple-x', x + 'px');
+    btn.style.setProperty('--ripple-y', y + 'px');
+    btn.classList.remove('ripple');
+    // Force reflow to restart animation
+    void btn.offsetWidth;
+    btn.classList.add('ripple');
+    setTimeout(() => btn.classList.remove('ripple'), 500);
+  });
 
   /* ═════ Settings / Config ═════ */
   const _cfgState = { sessions: [], mixin: null, editIdx: -1 };
@@ -1910,14 +2004,73 @@
       const el = $('hive-list');
       if (!sessions.length) { el.innerHTML = '<div class="text-frost-300 text-[12.5px] p-4 text-center">暂无 Hive 集群</div>'; return; }
       el.innerHTML = sessions.map(s => {
-        return `<div class="settings-card p-4">
-          <div class="flex items-center justify-between mb-2">
-            <div class="text-[13px] text-frost-100 font-medium">${_esc(s.name)}</div>
-            <span class="text-[11px] text-frost-400">${s.workers || 0} workers</span>
+        const status = s.status || 'unknown';
+        const statusColor = status === 'running' ? 'text-green-400' : status === 'stopped' ? 'text-red-400' : 'text-frost-400';
+        const statusDot = status === 'running' ? 'bg-green-400' : status === 'stopped' ? 'bg-red-400' : 'bg-frost-400';
+        const workerCount = s.worker_count || 0;
+        const isRunning = status === 'running';
+        return `<div class="settings-card p-4" data-hive="${_esc(s.name)}">
+          <div class="flex items-center justify-between mb-3">
+            <div class="flex items-center gap-2">
+              <div class="w-2 h-2 rounded-full ${statusDot} ${isRunning ? 'animate-pulse' : ''}"></div>
+              <span class="text-[13px] text-frost-100 font-medium">${_esc(s.name)}</span>
+              <span class="text-[11px] ${statusColor} px-1.5 py-0.5 rounded bg-white/5">${status}</span>
+            </div>
+            <div class="flex items-center gap-2">
+              <span class="text-[11px] text-frost-400">${workerCount} workers</span>
+              ${isRunning
+                ? `<button class="hive-stop-btn p-1.5 rounded-lg hover:bg-red-500/20 text-red-300 text-[11px] transition" data-hive="${_esc(s.name)}"><i data-lucide="square" class="w-3 h-3"></i></button>`
+                : ''}
+              <button class="hive-delete-btn p-1.5 rounded-lg hover:bg-red-500/20 text-red-400 text-[11px] transition" data-hive="${_esc(s.name)}" title="删除集群"><i data-lucide="trash-2" class="w-3 h-3"></i></button>
+            </div>
           </div>
-          ${s.commands ? `<pre class="text-[11px] text-brand-300 bg-ink-900 p-2 rounded-lg font-mono whitespace-pre-wrap border border-white/5 max-h-[120px] overflow-y-auto">${_esc(s.commands)}</pre>` : ''}
+          <div class="hive-workers-${_esc(s.name)} space-y-1.5">
+            ${(s.workers || []).map((w, i) => {
+              const wStatus = w.status || 'unknown';
+              const wColor = wStatus === 'running' ? 'text-green-300' : wStatus === 'idle' ? 'text-yellow-300' : 'text-frost-400';
+              return `<div class="flex items-center justify-between px-3 py-1.5 bg-ink-900/60 rounded-lg border border-white/5">
+                <div class="flex items-center gap-2">
+                  <div class="w-1.5 h-1.5 rounded-full ${wStatus === 'running' ? 'bg-green-400' : wStatus === 'idle' ? 'bg-yellow-400' : 'bg-frost-400'}"></div>
+                  <span class="text-[11.5px] text-frost-200">${_esc(w.role || 'worker-'+i)}</span>
+                </div>
+                <div class="flex items-center gap-2">
+                  <span class="text-[10.5px] ${wColor}">${wStatus}</span>
+                  ${w.pid ? `<span class="text-[10px] text-frost-500">PID:${w.pid}</span>` : ''}
+                  <button class="hive-log-btn p-0.5 rounded hover:bg-white/10 text-frost-400" data-hive="${_esc(s.name)}" data-role="${_esc(w.role || 'worker_'+i)}"><i data-lucide="scroll-text" class="w-3 h-3"></i></button>
+                </div>
+              </div>`;
+            }).join('')}
+          </div>
+          <div id="hive-log-${_esc(s.name)}" class="hidden mt-2 p-2 bg-ink-900 rounded-lg border border-white/5 max-h-[160px] overflow-y-auto">
+            <pre class="text-[10.5px] text-frost-300 font-mono whitespace-pre-wrap"></pre>
+          </div>
         </div>`;
       }).join('');
+      lucide.createIcons();
+      // Bind stop buttons
+      el.querySelectorAll('.hive-stop-btn').forEach(b => b.addEventListener('click', async () => {
+        if (!confirm('确认停止集群 ' + b.dataset.hive + '?')) return;
+        b.disabled = true;
+        try { await API.hiveStop(b.dataset.hive); showToast('集群已停止'); _loadHiveSessions(); _updateVizHive(); } catch(e) { showToast('停止失败: ' + e.message, 'error'); }
+      }));
+      // Bind log buttons
+      el.querySelectorAll('.hive-log-btn').forEach(b => b.addEventListener('click', async () => {
+        const logEl = document.getElementById('hive-log-' + b.dataset.hive);
+        if (!logEl) return;
+        logEl.classList.toggle('hidden');
+        if (!logEl.classList.contains('hidden')) {
+          try {
+            const ld = await API.hiveLog(b.dataset.hive, b.dataset.role, 50);
+            logEl.querySelector('pre').textContent = ld.log || '(无日志)';
+          } catch(e) { logEl.querySelector('pre').textContent = '日志加载失败: ' + e.message; }
+        }
+      }));
+      // Bind delete buttons
+      el.querySelectorAll('.hive-delete-btn').forEach(b => b.addEventListener('click', async () => {
+        if (!confirm('确认删除集群 ' + b.dataset.hive + '? 这将清理所有相关文件。')) return;
+        b.disabled = true;
+        try { await API.hiveDelete(b.dataset.hive); showToast('集群已删除'); _loadHiveSessions(); _updateVizHive(); } catch(e) { showToast('删除失败: ' + e.message, 'error'); }
+      }));
     } catch(e) { $('hive-list').innerHTML = `<div class="text-red-300 text-[12.5px] p-4">加载失败: ${e.message}</div>`; }
   }
 
@@ -1926,18 +2079,86 @@
     if (!name) { showToast('请输入集群名称', 'error'); return; }
     const objective = $('hive-objective').value.trim();
     const workers = parseInt($('hive-workers').value) || 3;
+    const btn = $('btn-hive-create');
+    btn.disabled = true; btn.textContent = '启动中...';
     try {
       const data = await API.hiveCreate({ name, objective, workers });
-      if (data.commands) {
-        $('hive-commands').classList.remove('hidden');
-        $('hive-commands-text').textContent = data.commands.join('\n\n');
-        showToast('启动命令已生成，请复制到终端执行');
+      if (data.ok) {
+        showToast(`集群 ${name} 已启动 (${data.workers || workers} workers)`, 'success');
+        $('hive-form').classList.add('hidden');
+        $('hive-name').value = '';
+        $('hive-objective').value = '';
+        _loadHiveSessions();
+        _updateVizHive();
+      } else {
+        showToast('创建失败: ' + (data.error || '未知错误'), 'error');
       }
-      _loadHiveSessions();
     } catch(e) { showToast('创建失败: ' + e.message, 'error'); }
+    finally { btn.disabled = false; btn.textContent = '启动集群'; }
+  }
+
+  /* ═══ Hive 3D 联动 ═══ */
+  async function _updateVizHive() {
+    try {
+      const { getViz } = await import('./three-viz/index.js');
+      const viz = getViz();
+      if (!viz) return;
+      const data = await API.hiveSessions();
+      const sessions = data.sessions || [];
+      const running = sessions.filter(s => s.status === 'running');
+      running.forEach(hive => {
+        (hive.workers || []).forEach((w, i) => {
+          viz.updateWorkerState({ id: i, status: w.status || 'idle', name: w.role || 'worker-'+i });
+        });
+      });
+      // Clear stopped hives
+      if (!running.length) {
+        for (let i = 0; i < 5; i++) viz.updateWorkerState({ id: i, status: 'offline' });
+      }
+    } catch(e) { /* viz not loaded yet, ignore */ }
   }
 
   function _esc(s) { if (!s) return ''; const d = document.createElement('div'); d.textContent = String(s); return d.innerHTML; }
+
+  /* ═════ 3D Visualization Panel ═════ */
+  let _vizLoaded = false;
+  async function loadVizPanel() {
+    if (_vizLoaded) return;
+    const loadingEl = $('viz-loading');
+    try {
+      if (loadingEl) loadingEl.classList.remove('hidden');
+      // Dynamic import of the 3D viz module
+      const { initViz, getViz } = await import('./three-viz/index.js');
+      await initViz('viz-canvas-container');
+      _vizLoaded = true;
+      if (loadingEl) loadingEl.classList.add('hidden');
+      // Scene switch buttons
+      const townBtn = $('viz-scene-town');
+      const officeBtn = $('viz-scene-office');
+      const resetBtn = $('viz-reset-cam');
+      if (townBtn) townBtn.addEventListener('click', () => {
+        const viz = getViz();
+        if (viz) viz.switchScene('town');
+        townBtn.classList.add('bg-brand-500/30');
+        if (officeBtn) officeBtn.classList.remove('bg-brand-500/30');
+      });
+      if (officeBtn) officeBtn.addEventListener('click', () => {
+        const viz = getViz();
+        if (viz) viz.switchScene('office');
+        officeBtn.classList.add('bg-brand-500/30');
+        if (townBtn) townBtn.classList.remove('bg-brand-500/30');
+      });
+      if (resetBtn) resetBtn.addEventListener('click', () => {
+        const viz = getViz();
+        if (viz) viz.resetCamera();
+      });
+      // Default: town scene active
+      if (townBtn) townBtn.classList.add('bg-brand-500/30');
+    } catch(e) {
+      console.error('[3D] loadVizPanel error:', e);
+      if (loadingEl) loadingEl.innerHTML = `<div class="text-red-400 text-sm">3D加载失败: ${e.message}</div>`;
+    }
+  }
 
   /* ═════ MCP Panel ═════ */
   async function loadMCPPanel() {
@@ -2001,12 +2222,22 @@
       // Bind test buttons
       listEl.querySelectorAll('.mcp-test-btn').forEach(btn => {
         btn.addEventListener('click', async () => {
-          showToast('测试连接中...', 'info');
+          const svrName = btn.dataset.server;
+          showToast(`🔌 测试 ${svrName} 连通性...`, 'info');
+          btn.disabled = true;
           try {
-            const r = await API.mcpTest(btn.dataset.server);
-            showToast(r.ok ? '✅ 连接成功' : '❌ 连接失败', r.ok ? 'success' : 'error');
-            loadMCPPanel();
-          } catch (e) { showToast('测试失败: ' + e.message, 'error'); }
+            const r = await API.mcpTest(svrName);
+            if (r.ok) {
+              const res = r.result || {};
+              const toolCount = res.tool_count ?? (res.tools?.length ?? '?');
+              const toolList = (res.tools || []).slice(0, 5).join(', ');
+              const moreInfo = toolCount > 5 ? ` 等${toolCount}个` : '';
+              showToast(`✅ ${svrName} 连接成功 (${toolCount}个工具: ${toolList}${moreInfo})`, 'success');
+            } else {
+              showToast(`❌ ${svrName} ${r.error || '连接失败'}`, 'error');
+            }
+          } catch (e) { showToast(`❌ 测试失败: ${e.message}`, 'error'); }
+          finally { btn.disabled = false; }
         });
       });
       // Bind toggle switches
@@ -2271,7 +2502,7 @@
   }
 
   // ── Handle WS messages for Context Panel ──
-  const _origWsOnMsg = ws?.onmessage;
+  const _origWsOnMsg = (typeof ws !== 'undefined' && ws) ? ws.onmessage : null;
   function contextPanelWsHandler(event) {
     try {
       const data = JSON.parse(event.data);
@@ -2358,114 +2589,6 @@
     document.addEventListener('keydown', function esc(e) {
       if (e.key === 'Escape') { close(); document.removeEventListener('keydown', esc); }
     });
-  }
-
-  /* ═════ T3.4.1+T3.4.2: Tool Flow SVG 可视化 ═════ */
-  const TOOL_FLOW_MAX = 50; // 最大显示节点数
-  const SVG_NS = 'http://www.w3.org/2000/svg';
-
-  function buildToolFlowSVG(toolCalls) {
-    if (!toolCalls || !toolCalls.length) return null;
-    const display = toolCalls.slice(0, TOOL_FLOW_MAX);
-    const hasMore = toolCalls.length > TOOL_FLOW_MAX;
-    const nodeW = 100, nodeH = 36, gapX = 24, gapY = 8;
-    const cols = Math.min(display.length, 5);
-    const rows = Math.ceil(display.length / cols);
-    const svgW = cols * (nodeW + gapX) + gapX;
-    const svgH = rows * (nodeH + gapY) + gapY + (hasMore ? 24 : 0);
-
-    const svg = document.createElementNS(SVG_NS, 'svg');
-    svg.setAttribute('class', 'tool-flow-svg');
-    svg.setAttribute('width', '100%');
-    svg.setAttribute('viewBox', `0 0 ${svgW} ${svgH}`);
-
-    // 状态颜色
-    const statusColor = (s) => {
-      if (s === 'success' || s === 'completed') return '#22c55e';
-      if (s === 'error' || s === 'failed') return '#ef4444';
-      if (s === 'running' || s === 'in_progress') return '#3b82f6';
-      return '#6b7280'; // pending/unknown
-    };
-
-    display.forEach((tc, i) => {
-      const col = i % cols, row = Math.floor(i / cols);
-      const x = gapX + col * (nodeW + gapX);
-      const y = gapY + row * (nodeH + gapY);
-      const color = statusColor(tc.status || tc.state || 'success');
-
-      // 连线到下一个节点
-      if (i < display.length - 1) {
-        const nCol = (i + 1) % cols, nRow = Math.floor((i + 1) / cols);
-        const nx = gapX + nCol * (nodeW + gapX) + nodeW / 2;
-        const ny = gapY + nRow * (nodeH + gapY) + nodeH / 2;
-        const line = document.createElementNS(SVG_NS, 'line');
-        line.setAttribute('x1', x + nodeW); line.setAttribute('y1', y + nodeH / 2);
-        line.setAttribute('x2', nx); line.setAttribute('y2', ny);
-        line.setAttribute('stroke', '#334155'); line.setAttribute('stroke-width', '1.5');
-        line.setAttribute('stroke-dasharray', '4,2');
-        svg.appendChild(line);
-      }
-
-      // 节点圆角矩形
-      const rect = document.createElementNS(SVG_NS, 'rect');
-      rect.setAttribute('x', x); rect.setAttribute('y', y);
-      rect.setAttribute('width', nodeW); rect.setAttribute('height', nodeH);
-      rect.setAttribute('rx', '8'); rect.setAttribute('fill', '#1e293b');
-      rect.setAttribute('stroke', color); rect.setAttribute('stroke-width', '1.5');
-      svg.appendChild(rect);
-
-      // 状态圆点
-      const dot = document.createElementNS(SVG_NS, 'circle');
-      dot.setAttribute('cx', x + 12); dot.setAttribute('cy', y + nodeH / 2);
-      dot.setAttribute('r', '4'); dot.setAttribute('fill', color);
-      svg.appendChild(dot);
-
-      // 工具名文字
-      const text = document.createElementNS(SVG_NS, 'text');
-      text.setAttribute('x', x + 22); text.setAttribute('y', y + nodeH / 2 + 4);
-      text.setAttribute('fill', '#e2e8f0'); text.setAttribute('font-size', '10');
-      text.setAttribute('font-family', 'monospace');
-      const name = (tc.name || tc.tool || 'tool').substring(0, 12);
-      text.textContent = name;
-      svg.appendChild(text);
-    });
-
-    // 折叠指示
-    if (hasMore) {
-      const more = document.createElementNS(SVG_NS, 'text');
-      more.setAttribute('x', svgW / 2); more.setAttribute('y', svgH - 4);
-      more.setAttribute('fill', '#94a3b8'); more.setAttribute('font-size', '11');
-      more.setAttribute('text-anchor', 'middle');
-      more.textContent = `...+${toolCalls.length - TOOL_FLOW_MAX} 步`;
-      svg.appendChild(more);
-    }
-
-    return svg;
-  }
-
-  // 注入Tool Flow到消息气泡
-  function injectToolFlow(msgEl, toolCalls) {
-    if (!toolCalls || !toolCalls.length) return;
-    const container = document.createElement('div');
-    container.className = 'tool-flow-container';
-    const label = document.createElement('div');
-    label.className = 'tool-flow-label';
-    label.textContent = `🔧 Tool Flow (${toolCalls.length}步)`;
-    container.appendChild(label);
-    const svg = buildToolFlowSVG(toolCalls);
-    if (svg) container.appendChild(svg);
-
-    // 折叠/展开切换
-    container.addEventListener('click', () => {
-      container.classList.toggle('tool-flow-collapsed');
-    });
-    // 默认展开(≤5步)或折叠(>5步)
-    if (toolCalls.length > 5) container.classList.add('tool-flow-collapsed');
-
-    // 插入到消息内容之后
-    const contentEl = msgEl.querySelector('.msg-content') || msgEl.querySelector('.message-content');
-    if (contentEl) contentEl.appendChild(container);
-    else msgEl.appendChild(container);
   }
 
   /* ═════ T3.4.3: 快捷键体系 ═════ */
@@ -2625,62 +2748,7 @@
   };
   initTrustLevel();
 
-  // ── T4.2: Execution Timeline Monitor ──
-  function _getOrCreateTimeline() {
-    let tl = document.getElementById('exec-timeline');
-    if (tl) return tl;
-    // Find sidebar panel for timeline
-    const sidebar = document.querySelector('.sidebar') || document.querySelector('#sidebar');
-    if (!sidebar) { console.warn('[timeline] no sidebar found'); return null; }
-    // Create timeline container
-    const section = document.createElement('div');
-    section.id = 'exec-timeline-section';
-    section.className = 'exec-timeline-section';
-    section.innerHTML = `<div class="exec-tl-header"><span>📡 执行监控</span><button class="exec-tl-clear" onclick="window._clearTimeline()">✕</button></div><div id="exec-timeline" class="exec-timeline"></div>`;
-    sidebar.appendChild(section);
-    return document.getElementById('exec-timeline');
-  }
-  window._clearTimeline = function() {
-    const tl = document.getElementById('exec-timeline');
-    if (tl) tl.innerHTML = '';
-  };
-
-  function appendTimelineStep(step) {
-    const tl = _getOrCreateTimeline();
-    if (!tl) return;
-    const statusColors = { running: '#fbbf24', success: '#34d399', error: '#f87171' };
-    const statusIcons = { running: '⏳', success: '✅', error: '❌' };
-    const color = statusColors[step.status] || '#64748b';
-    const icon = statusIcons[step.status] || '⚪';
-    const el = document.createElement('div');
-    el.className = 'exec-tl-node';
-    el.setAttribute('data-step', step.step || 0);
-    const durText = step.duration ? ` (${(step.duration / 1000).toFixed(1)}s)` : '';
-    el.innerHTML = `
-      <div class="exec-tl-dot" style="background:${color}"></div>
-      <div class="exec-tl-content">
-        <div class="exec-tl-title">${icon} ${step.tool || '?'}${durText}</div>
-        ${step.result_summary ? `<div class="exec-tl-summary">${step.result_summary.substring(0, 120)}</div>` : ''}
-        <div class="exec-tl-detail" style="display:none">
-          <div class="exec-tl-detail-inner">
-            ${step.args ? `<div class="exec-tl-row"><b>Input:</b> <code>${JSON.stringify(step.args).substring(0, 500)}</code></div>` : ''}
-            ${step.result_summary ? `<div class="exec-tl-row"><b>Result:</b> <span>${step.result_summary}</span></div>` : ''}
-            <div class="exec-tl-row"><b>Time:</b> ${new Date(step.timestamp).toLocaleTimeString()}</div>
-          </div>
-        </div>
-      </div>`;
-    // Click to expand detail (T4.2.3)
-    el.addEventListener('click', () => {
-      const det = el.querySelector('.exec-tl-detail');
-      if (det) det.style.display = det.style.display === 'none' ? 'block' : 'none';
-    });
-    tl.appendChild(el);
-    // Auto-scroll
-    const section = document.getElementById('exec-timeline-section');
-    if (section) section.scrollTop = section.scrollHeight;
-    // Limit nodes to 100
-    while (tl.children.length > 100) tl.removeChild(tl.firstChild);
-  }
+  // ── Execution Timeline removed — replaced by 3D Desktop Pet (pet3d.js) ──
 
   // ── T4.3.4: Capability Report ──
   function _renderCapCards(report) {
@@ -2723,4 +2791,148 @@
       if (window.lucide) lucide.createIcons();
     }, 2000);
   });
+
+  // ══════════════════════════════════════════════
+  //  🐾 Pet Settings — init / load / live preview
+  // ══════════════════════════════════════════════
+  const PET_STORAGE_KEY = 'ga_pet_config';
+
+  function loadPetConfig() {
+    try {
+      const raw = _storage.get(PET_STORAGE_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch(e) { return null; }
+  }
+
+  function savePetConfig(cfg) {
+    _storage.set(PET_STORAGE_KEY, JSON.stringify(cfg));
+  }
+
+  function getPetDefaults() {
+    return { enabled: true, mode: '3d', type: 'cat', liveModel: 'shizuku', size: 160, interactHover: true, interactClick: true, interactNotify: true, name: '' };
+  }
+
+  // Apply saved config on load (wait for pet3d.js to register APIs)
+  function applySavedPetConfig() {
+    const cfg = loadPetConfig();
+    if (!cfg) return;
+    // Wait until pet3d.js is ready
+    const tryApply = () => {
+      if (typeof window.__petApplyConfig === 'function') {
+        window.__petApplyConfig(cfg);
+        if (window.__petSetFlags) {
+          window.__petSetFlags({ hover: cfg.interactHover, click: cfg.interactClick, notify: cfg.interactNotify });
+        }
+        // Sync selector buttons in settings panel
+        const sel = document.querySelector(`.pet-pick-btn[data-pet="${cfg.type}"]`);
+        if (sel) { sel.classList.add('active'); }
+      } else {
+        setTimeout(tryApply, 300);
+      }
+    };
+    tryApply();
+  }
+
+  // Init pet settings panel events (called when settings tab is shown)
+  function initPetSettings() {
+    const cfg = loadPetConfig() || getPetDefaults();
+    const el = (id) => document.getElementById(id);
+
+    // Enabled toggle
+    const toggleEl = el('pet-enabled');
+    if (toggleEl) {
+      toggleEl.checked = cfg.enabled;
+      toggleEl.addEventListener('change', () => {
+        cfg.enabled = toggleEl.checked;
+        savePetConfig(cfg);
+        if (window.__petApplyConfig) window.__petApplyConfig(cfg);
+      });
+    }
+
+    // Type selector buttons
+    document.querySelectorAll('.pet-pick-btn[data-pet]').forEach(btn => {
+      // Highlight active
+      if (btn.dataset.pet === cfg.type) btn.classList.add('active');
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.pet-pick-btn[data-pet]').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        cfg.type = btn.dataset.pet;
+        cfg.mode = '3d';            // 选 3D 动物自动切到 3d 模式
+        savePetConfig(cfg);
+        if (window.__petSwitch) window.__petSwitch(cfg.type);
+      });
+    });
+
+    // ── Live2D model selector buttons (Shizuku / Haru) ──
+    document.querySelectorAll('.pet-pick-btn[data-live]').forEach(btn => {
+      if (btn.dataset.live === cfg.liveModel) btn.classList.add('active');
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.pet-pick-btn[data-live]').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        cfg.liveModel = btn.dataset.live;
+        cfg.mode = 'live2d';        // 选动漫模型自动切到 live2d 模式
+        savePetConfig(cfg);
+        // 切换 mode / 模型需要重载页面让加载器选对模块
+        setTimeout(() => location.reload(), 200);
+      });
+    });
+
+    // ── Mode toggle: 3D animals ↔ Live2D anime ──
+    const modeToggle = el('pet-mode-toggle');
+    if (modeToggle) {
+      modeToggle.checked = (cfg.mode === 'live2d');
+      modeToggle.addEventListener('change', () => {
+        cfg.mode = modeToggle.checked ? 'live2d' : '3d';
+        savePetConfig(cfg);
+        setTimeout(() => location.reload(), 200);
+      });
+    }
+
+    // Size slider
+    const sizeSlider = el('pet-size');
+    const sizeLabel = el('pet-size-label');
+    if (sizeSlider) {
+      sizeSlider.value = cfg.size;
+      if (sizeLabel) sizeLabel.textContent = cfg.size + 'px';
+      sizeSlider.addEventListener('input', () => {
+        cfg.size = parseInt(sizeSlider.value);
+        if (sizeLabel) sizeLabel.textContent = cfg.size + 'px';
+        savePetConfig(cfg);
+        if (window.__petApplyConfig) window.__petApplyConfig(cfg);
+      });
+    }
+
+    // Interaction toggles
+    const toggles = [
+      { id: 'pet-interact-hover', key: 'interactHover', flag: 'hover' },
+      { id: 'pet-interact-click', key: 'interactClick', flag: 'click' },
+      { id: 'pet-interact-notify', key: 'interactNotify', flag: 'notify' },
+    ];
+    toggles.forEach(({ id, key, flag }) => {
+      const tEl = el(id);
+      if (tEl) {
+        tEl.checked = cfg[key];
+        tEl.addEventListener('change', () => {
+          cfg[key] = tEl.checked;
+          savePetConfig(cfg);
+          if (window.__petSetFlags) window.__petSetFlags({ [flag]: tEl.checked });
+        });
+      }
+    });
+
+    // Pet name
+    const nameInput = el('pet-name');
+    if (nameInput) {
+      nameInput.value = cfg.name || '';
+      nameInput.addEventListener('input', () => {
+        cfg.name = nameInput.value.trim();
+        savePetConfig(cfg);
+        if (window.__petApplyConfig) window.__petApplyConfig(cfg);
+      });
+    }
+  }
+
+  // Apply saved pet config on load
+  applySavedPetConfig();
+
 })();

@@ -22,6 +22,9 @@
   let ws = null;
   let wsHandlers = {};
   let wsReconnectTimer = null;
+  let wsReconnectCount = 0;
+  const WS_MAX_RECONNECT = 20;        // cap at 20 retries (~60s)
+  const WS_RECONNECT_BASE_MS = 3000;  // base delay with exponential backoff
 
   async function _getJSON(path) {
     const r = await fetch(BASE + path);
@@ -68,17 +71,35 @@
   }
 
   /* ── WebSocket layer ── */
+  function _scheduleReconnect(handlers) {
+    if (wsReconnectCount >= WS_MAX_RECONNECT) {
+      console.warn('[WS] Max reconnect attempts reached (' + WS_MAX_RECONNECT + '). Giving up.');
+      wsHandlers.onmaxreconnect && wsHandlers.onmaxreconnect();
+      return;
+    }
+    wsReconnectCount++;
+    const delay = Math.min(WS_RECONNECT_BASE_MS * Math.pow(1.5, wsReconnectCount - 1), 30000);
+    clearTimeout(wsReconnectTimer);
+    wsReconnectTimer = setTimeout(() => connect(handlers), delay);
+  }
   async function connect(handlers) {
     wsHandlers = handlers || {};
+    // Close existing connection to prevent leaks
+    if (ws) {
+      try { ws.onclose = null; ws.close(); } catch(_) {}
+      ws = null;
+    }
     try {
       const cfg = await getConfig();
       const wsUrl = `ws://${location.hostname}:${cfg.ws_port}`;
       ws = new WebSocket(wsUrl);
-      ws.onopen = () => { wsHandlers.onopen && wsHandlers.onopen(); };
+      ws.onopen = () => {
+        wsReconnectCount = 0; // reset on successful connect
+        wsHandlers.onopen && wsHandlers.onopen();
+      };
       ws.onclose = () => {
         wsHandlers.onclose && wsHandlers.onclose();
-        clearTimeout(wsReconnectTimer);
-        wsReconnectTimer = setTimeout(() => connect(wsHandlers), 3000);
+        _scheduleReconnect(wsHandlers);
       };
       ws.onerror = (e) => { wsHandlers.onerror && wsHandlers.onerror(e); };
       ws.onmessage = (evt) => {
@@ -90,8 +111,7 @@
       };
     } catch (e) {
       wsHandlers.onerror && wsHandlers.onerror(e);
-      clearTimeout(wsReconnectTimer);
-      wsReconnectTimer = setTimeout(() => connect(wsHandlers), 3000);
+      _scheduleReconnect(wsHandlers);
     }
   }
   async function getLLMConfig() { return _getJSON('/api/llm-config'); }
@@ -108,7 +128,6 @@
     return true;
   }
   function ready() { return ws && ws.readyState === 1; }
-  function getWs() { return ws; }
 
   // Sophub (community SOP hub)
   async function sophubSearch(q, page = 1, pageSize = 24) { return _getJSON(`/api/sophub/search?q=${encodeURIComponent(q)}&page=${page}&page_size=${pageSize}`); }
@@ -159,6 +178,9 @@
   async function hiveSessions() { return _getJSON('/api/hive/sessions'); }
   async function hiveCreate(opts) { return _postJSON('/api/hive/create', opts); }
   async function hiveStatus(name) { return _getJSON('/api/hive/' + encodeURIComponent(name) + '/status'); }
+  async function hiveStop(name) { return _postJSON('/api/hive/' + encodeURIComponent(name) + '/stop', {}); }
+  async function hiveLog(name, role, lines) { return _getJSON('/api/hive/' + encodeURIComponent(name) + '/log/' + encodeURIComponent(role) + (lines ? '?lines=' + lines : '')); }
+  async function hiveDelete(name) { const r = await fetch('/api/hive/' + encodeURIComponent(name), { method: 'DELETE' }); if (!r.ok) throw new Error('Delete failed: ' + r.status); return r.json(); }
 
   // ── MCP ──
   async function mcpServers() { return _getJSON('/api/mcp/servers'); }
@@ -178,21 +200,19 @@
   async function mcpToggle(name) { return _postJSON('/api/mcp/servers/' + encodeURIComponent(name) + '/toggle', {}); }
   async function mcpTest(server, tool, arguments) { return _postJSON('/api/mcp/test', { server, tool, arguments: arguments || {} }); }
 
-  function getHandlers() { return wsHandlers; }
-
   window.GA_API = {
     getConfig, getStatus,
     listSessions, getSessionHistory, restoreSession, renameSession, deleteSession,
     listSkills, getSop,
     uploadFile,
     getLLMConfig, saveLLMConfig, reloadLLMConfig, backupMykeyPy, listModels,
-    connect, send, ready, getWs, getHandlers,
+    connect, send, ready,
     sophubSearch, sophubSop, sophubDownload, sophubUpload, sophubMe,
     fetchSlashCommands,
     schedulerTasks, schedulerCreate, schedulerUpdate, schedulerDelete,
     schedulerDone, schedulerDoneRead, schedulerLog,
     goalState, goalStart, goalStop,
-    hiveSessions, hiveCreate, hiveStatus,
+    hiveSessions, hiveCreate, hiveStatus, hiveStop, hiveLog, hiveDelete,
     mcpServers, mcpAdd, mcpDelete, mcpToggle, mcpTest,
   };
 })();
