@@ -1,4 +1,4 @@
-"""`/continue` command: list & restore past model_responses sessions.
+﻿"""`/continue` command: list & restore past model_responses sessions.
 Pure functions + one `install(cls)` monkey-patch entry. No side effects at import.
 """
 import ast, glob, json, os, re, time
@@ -36,7 +36,7 @@ def _first_user(pairs):
         if not isinstance(msg, dict): continue
         for blk in msg.get('content', []) or []:
             if isinstance(blk, dict) and blk.get('type') == 'text':
-                t = (blk.get('text') or '').strip()
+                t = strip_project_mode(blk.get('text') or '').strip()
                 if t and '<history>' not in t and not t.startswith('### [WORKING MEMORY]'):
                     return t
     for p, _ in pairs[:1]:
@@ -105,20 +105,18 @@ def _recent_context(my_pid, n=5):
     return ('[RecentContext] 近期并行会话（非当前）:\n' + '\n'.join(out) + '\n[/RecentContext]') if out else ""
 
 def _parse_native_history(pairs):
-    """Parse log pairs into a (user, assistant) history list.
-    Resilient: a single corrupt pair (e.g. truncated after HTTP 429) is skipped
-    rather than aborting the whole restore. Returns None only if nothing parses."""
     history = []
     for p, r in pairs:
         try: user_msg = json.loads(p)
-        except Exception: continue
-        if not (isinstance(user_msg, dict) and user_msg.get('role') == 'user'): continue
+        except Exception: return None
         try: blocks = ast.literal_eval(r)
-        except Exception: continue
-        if not isinstance(blocks, list): continue
+        except Exception: return None
+        if not (isinstance(user_msg, dict) and user_msg.get('role') == 'user'): return None
+        if not isinstance(blocks, list): return None
         history.append(user_msg)
         history.append({'role': 'assistant', 'content': blocks})
-    return history or None
+    return history
+
 
 _PREVIEW_WIN = 32 * 1024
 
@@ -410,17 +408,7 @@ def restore(agent, path):
     if history is not None:
         agent.abort()
         _replace_backend_history(agent, history)
-        # 恢复后立即裁剪，防止长会话恢复时爆上下文
-        backend = getattr(getattr(agent, 'llmclient', None), 'backend', None)
-        if backend is not None and hasattr(backend, 'history') and hasattr(backend, 'context_win'):
-            from llmcore import trim_messages_history
-            before = len(backend.history)
-            trim_messages_history(backend.history, backend.context_win)
-            after = len(backend.history)
-            trimmed_info = f'（裁剪 {before} → {after} 条）' if before != after else ''
-        else:
-            trimmed_info = ''
-        return f'✅ 已恢复 {len(pairs)} 轮完整对话（{name}）{trimmed_info}\n(已写入 backend.history，可直接继续)', True
+        return f'✅ 已恢复 {len(pairs)} 轮完整对话（{name}）\n(已写入 backend.history，可直接继续)', True
     from chatapp_common import _restore_native_history, _restore_text_pairs
     summary = _restore_text_pairs(content) or _restore_native_history(content)
     if not summary: return f'❌ {name} 无法解析（非 native 且无摘要可提取）', False
@@ -452,6 +440,17 @@ def handle(agent, query, display_queue):
 _INJECT_MARKERS = ('### [WORKING MEMORY]', '[SYSTEM TIPS]', '[SYSTEM]', '[System]',
                    '[DANGER]', '### [总结提炼经验]')
 
+# project_mode 插件把 `\n\n---\n[PROJECT MODE: <name>]\n…\n---` 追加在用户消息末尾
+# (见 plugins/project_mode._build_injection)。它会进日志,所以 /continue 重建 UI 时
+# 必须从显示文本里剔除,只留用户原话。不能加进 _INJECT_MARKERS——那会把整块(连用户
+# 原话)一起丢弃;这里只剜掉注入这一段后缀。
+_PM_BLOCK_RE = re.compile(r"\n*-{3,}\n\[PROJECT MODE:.*?\n-{3,}\s*$", re.DOTALL)
+
+
+def strip_project_mode(text: str) -> str:
+    """剔除用户文本尾部的 project-mode 注入块。"""
+    return _PM_BLOCK_RE.sub("", text or "")
+
 
 def _user_text(prompt_body):
     """User-typed text from a prompt JSON; '' if this is an agent auto-continuation.
@@ -470,7 +469,7 @@ def _user_text(prompt_body):
         return ''
     for blk in blocks:
         if isinstance(blk, dict) and blk.get('type') == 'text':
-            t = (blk.get('text') or '').strip()
+            t = strip_project_mode(blk.get('text') or '').strip()
             if t and not any(mk in t for mk in _INJECT_MARKERS): return t
     return ''
 
@@ -488,11 +487,22 @@ def _assistant_text(response_body):
 
 
 def _format_tool_use(block):
-    """Match agent_loop.py:72 verbose tool-call header."""
+    """Match agent_loop.py:78 verbose tool-call header byte-for-byte.
+
+    MUST use agent_loop's `get_pretty_json`, not a plain `json.dumps`: the
+    former rewrites a `script` arg's `"; "` into `";\\n  "`, so for tools
+    carrying `script` (code_run, web_execute_js) a plain dumps produces a
+    *different* fence body. The TUI's write/read/code cards content-address
+    their captures by `hash(get_pretty_json(args))`; a mismatched fence here
+    means the hash misses and the card silently falls back to the raw block."""
     name = block.get('name', '?')
     args = block.get('input', {})
-    try: pretty = json.dumps(args, indent=2, ensure_ascii=False).replace('\\n', '\n')
-    except Exception: pretty = str(args)
+    try:
+        from agent_loop import get_pretty_json
+        pretty = get_pretty_json(args)
+    except Exception:
+        try: pretty = json.dumps(args, indent=2, ensure_ascii=False).replace('\\n', '\n')
+        except Exception: pretty = str(args)
     return f"🛠️ Tool: `{name}`  📥 args:\n````text\n{pretty}\n````\n"
 
 
@@ -546,7 +556,166 @@ def _format_response_segment(response_body, tool_results):
     return '\n\n'.join(p for p in ['\n\n'.join(texts), '\n'.join(tool_parts)] if p)
 
 
-def extract_ui_messages(path, max_rounds=0):
+_PLAN_ENTRY_RE = re.compile(r'enter_plan_mode\(\s*[\'"]([^\'"]+plan\.md)[\'"]')
+
+
+def find_plan_entry(path):
+    """Last `enter_plan_mode("…plan.md")` call in a model_responses log.
+
+    Plan mode has exactly one entry point (plan_sop.md): a `code_run` tool call
+    whose inline_eval script invokes `handler.enter_plan_mode(...)`. That call
+    survives in the log as a structured `tool_use` block — unlike a plan path
+    merely *mentioned* in chat text, it cannot be produced by the user typing
+    a filename. Scanning these blocks is therefore the restore criterion for
+    the plan card; the last match wins so re-entered plans track the newest.
+
+    Returns the plan.md path string as written in the script, or None.
+    """
+    try:
+        with open(path, encoding='utf-8', errors='replace') as f:
+            content = f.read()
+    except Exception:
+        return None
+    last = None
+    for _prompt, response in _pairs(content):
+        try:
+            blocks = ast.literal_eval(response)
+        except Exception:
+            continue
+        if not isinstance(blocks, list):
+            continue
+        for b in blocks:
+            if not (isinstance(b, dict) and b.get('type') == 'tool_use'
+                    and b.get('name') == 'code_run'):
+                continue
+            m = _PLAN_ENTRY_RE.search(str((b.get('input') or {}).get('script') or ''))
+            if m:
+                last = m.group(1)
+    return last
+
+
+def iter_write_captures(path):
+    """Replay a log's file_write/file_patch/file_read calls into capture dicts
+    the TUI can feed to its card renderers (`_WRITE_CAP`), keyed later by
+    hash(get_pretty_json).
+
+    Live mode fills `_WRITE_CAP` from tool_before/tool_after hooks (with a real
+    pre-write disk snapshot); on /continue that history is gone, but the
+    structured `tool_use.input` survives in the log — clean, complete args. We
+    also track each path's content *within this session* so a file
+    written/patched several times shows real old→new diffs (not N× full "new
+    file"). Files first touched by an untracked on-disk state still fall back
+    to a full-content block.
+
+    Returns write entries `{"name", "args", "existed", "old", "status", "msg"}`
+    and read entries `{"name", "args", "content"}` in call order. `status`/`msg`
+    come from the matching tool_result so the header can show ✗ on a failed
+    write; a read's `content` is the raw tool_result text (the read card strips
+    its LLM-facing chrome itself).
+    """
+    try:
+        with open(path, encoding='utf-8', errors='replace') as f:
+            content = f.read()
+    except Exception:
+        return []
+    pairs = _pairs(content)
+    # tool_use_id -> (status, msg) from any prompt's tool_result blocks (the
+    # result lands in the *next* round's Prompt as a tool_result whose content
+    # is the json-dumped outcome.data, e.g. {"status":"success","msg":...}).
+    # tr_raw keeps the undecoded text — a file_read result is plain text.
+    tr_status, tr_raw = {}, {}
+    for prompt, _ in pairs:
+        try:
+            msg_obj = json.loads(prompt)
+        except Exception:
+            continue
+        if not isinstance(msg_obj, dict):
+            continue
+        for blk in msg_obj.get('content', []) or []:
+            if not (isinstance(blk, dict) and blk.get('type') == 'tool_result'):
+                continue
+            tid = blk.get('tool_use_id')
+            c = blk.get('content')
+            if isinstance(c, list):
+                c = ''.join(b.get('text', '') for b in c
+                            if isinstance(b, dict) and b.get('type') == 'text')
+            if tid and isinstance(c, str):
+                tr_raw[tid] = c
+            try:
+                d = json.loads(c) if isinstance(c, str) else None
+            except Exception:
+                d = None
+            if tid and isinstance(d, dict):
+                tr_status[tid] = (d.get('status'), str(d.get('msg') or ''))
+
+    out, state = [], {}
+    for _prompt, response in pairs:
+        try:
+            blocks = ast.literal_eval(response)
+        except Exception:
+            continue
+        if not isinstance(blocks, list):
+            continue
+        for b in blocks:
+            if not (isinstance(b, dict) and b.get('type') == 'tool_use'):
+                continue
+            name = b.get('name')
+            if name not in ('file_write', 'file_patch', 'file_read', 'code_run'):
+                continue
+            args = b.get('input') or {}
+            p = args.get('path')
+            if name == 'file_read':
+                out.append({'name': name, 'args': args,
+                            'content': tr_raw.get(b.get('id'))})
+                continue
+            if name == 'code_run':
+                # data = the tool_result text; a dict result is JSON, an
+                # inline_eval / code-missing result is plain text. Pass the
+                # parsed dict when possible so the card reads exit_code/stdout;
+                # else the raw string (the card handles both).
+                raw = tr_raw.get(b.get('id'))
+                d = raw
+                try:
+                    parsed = json.loads(raw) if isinstance(raw, str) else None
+                    if isinstance(parsed, dict):
+                        d = parsed
+                except Exception:
+                    pass
+                out.append({'name': name, 'args': args, 'data': d})
+                continue
+            st, mg = tr_status.get(b.get('id'), (None, ''))
+            if name == 'file_patch':
+                # If this file's content is tracked within the session, pass it as
+                # the pre-write full file so the renderer can do a whole-file diff
+                # (real line numbers + context); else fall back to the fragment.
+                pre = state.get(p, '')
+                out.append({'name': name, 'args': args,
+                            'existed': p in state, 'old': pre,
+                            'status': st, 'msg': mg})
+                if st == 'error':
+                    continue  # failed call left the disk untouched — don't book it
+                old = args.get('old_content') or ''
+                if p in state and old:
+                    state[p] = state[p].replace(old, args.get('new_content') or '', 1)
+            else:  # file_write
+                existed = p in state
+                old = state.get(p, '')
+                new = str(args.get('content') or '')
+                mode = str(args.get('mode') or 'overwrite')
+                out.append({'name': name, 'args': args, 'existed': existed, 'old': old,
+                            'status': st, 'msg': mg})
+                if st == 'error':
+                    continue  # failed call left the disk untouched — don't book it
+                if mode == 'append':
+                    state[p] = old + new
+                elif mode == 'prepend':
+                    state[p] = new + old
+                else:
+                    state[p] = new
+    return out
+
+
+def extract_ui_messages(path):
     """Parse a model_responses log into [{role, content}, ...] for UI replay.
 
     Each user-initiated round becomes one user bubble plus one assistant bubble.
@@ -554,30 +723,12 @@ def extract_ui_messages(path, max_rounds=0):
     separated by ``**LLM Running (Turn N) ...**`` markers. Tool calls and their
     results are rendered into the assistant content using the same string format
     that agent_loop yields live, so fold_turns can fold them identically.
-
-    max_rounds: if > 0, only parse the last N user-initiated rounds (prevents OOM
-    on very long sessions). The file is still read fully but only the tail pairs
-    are processed into UI messages.
     """
     try:
         with open(path, encoding='utf-8', errors='replace') as f: content = f.read()
     except Exception: return []
     pairs = _pairs(content)
     if not pairs: return []
-
-    # Trim to last N user-initiated rounds if max_rounds specified
-    if max_rounds > 0:
-        user_count = 0
-        cut = 0
-        for i in range(len(pairs) - 1, -1, -1):
-            if _user_text(pairs[i][0]):
-                user_count += 1
-                if user_count > max_rounds:
-                    cut = i + 1
-                    break
-        if cut > 0:
-            pairs = pairs[cut:]
-
     # tool_results live in the *next* Prompt's content; index look-ahead.
     next_tr = [{} for _ in pairs]
     for i in range(len(pairs) - 1):
